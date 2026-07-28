@@ -1057,4 +1057,6 @@ if __name__ == "__main__":
     print(f"  Prospects: {SALES_PROSPECTS_PATH}")
     print(f"  Negative:  {NEGATIVE_LIST_PATH}")
     print(f"  Open: http://localhost:{args.port}\n")
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+    # Listen on 0.0.0.0 on Render (or if HOST env var is set), otherwise default to local 127.0.0.1
+    host_ip = os.environ.get("HOST", "0.0.0.0" if os.environ.get("RENDER") else "127.0.0.1")
+    app.run(host=host_ip, port=args.port, debug=False)
