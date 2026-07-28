@@ -1,0 +1,10 @@
+.vercel
+.env
+__pycache__/
+.DS_Store
+*.log
+outputs/pipeline_*.json
+outputs/pipeline_*.csv
+outputs/pipeline_*.html
+outputs/linkedin_urls_*.html
+data/verifier_cache.jsonl

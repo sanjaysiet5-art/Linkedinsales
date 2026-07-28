@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LinkedIn Sales Pipeline — Quick Scan (All Services)</title>
+<style>
+    :root {
+      --bg: #ffffff;
+      --canvas: #f7f8fa;
+      --ink: #0f172a;
+      --ink-soft: #334155;
+      --muted: #64748b;
+      --faint: #94a3b8;
+      --line: #eef1f5;
+      --line-strong: #e2e8f0;
+      --accent: #4f46e5;
+      --accent-2: #8b5cf6;
+      --accent-soft: #eef2ff;
+      --shadow-sm: 0 1px 2px rgba(15,23,42,.04), 0 1px 3px rgba(15,23,42,.05);
+      --shadow-lg: 0 18px 40px rgba(15,23,42,.09), 0 6px 12px rgba(15,23,42,.05);
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--ink-soft);
+      min-height: 100vh;
+      padding: 44px 24px 72px;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: -.011em;
+    }
+    .wrap { max-width: 1320px; margin: 0 auto; }
+
+    /* Header */
+    .header { text-align: center; margin-bottom: 36px; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 11.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+      color: var(--accent); background: var(--accent-soft);
+      padding: 6px 14px; border-radius: 999px; margin-bottom: 18px;
+    }
+    .header h1 {
+      font-size: 34px; font-weight: 700; color: var(--ink);
+      letter-spacing: -.032em; margin-bottom: 12px;
+    }
+    .header .meta { color: var(--muted); font-size: 14px; }
+    .header .meta strong { color: var(--ink-soft); font-weight: 600; }
+    .header .meta .dot { color: #cbd5e1; margin: 0 12px; font-weight: 400; }
+
+    /* Stats strip */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 30px; }
+    .stat {
+      background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 22px 24px; box-shadow: var(--shadow-sm); position: relative; overflow: hidden;
+    }
+    .stat::before {
+      content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2)); border-radius: 3px;
+    }
+    .stat .num { font-size: 34px; font-weight: 700; color: var(--ink); letter-spacing: -.03em; line-height: 1; }
+    .stat .lbl {
+      font-size: 11.5px; color: var(--muted); margin-top: 9px;
+      text-transform: uppercase; letter-spacing: .07em; font-weight: 600;
+    }
+
+    /* Filters */
+    .filters {
+      display: flex; gap: 9px; margin-bottom: 26px; flex-wrap: wrap;
+      padding: 12px; background: var(--canvas); border: 1px solid var(--line);
+      border-radius: var(--radius); align-items: center;
+    }
+    .filters .sep { flex: 1 1 auto; }
+    .filter-btn {
+      background: #fff; border: 1px solid var(--line-strong); color: var(--muted);
+      padding: 8px 15px; border-radius: 999px; cursor: pointer;
+      font-size: 13px; font-weight: 500; transition: all .18s ease;
+    }
+    .filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .filter-btn.active {
+      background: var(--accent); border-color: var(--accent); color: #fff;
+      box-shadow: 0 6px 14px rgba(79,70,229,.22);
+    }
+
+    /* Cards */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 18px; }
+    .card {
+      background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 20px; box-shadow: var(--shadow-sm);
+      transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+      display: flex; flex-direction: column;
+    }
+    .card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: var(--line-strong); }
+    .card[data-score="10"], .card[data-score="9"] { border-left: 3px solid #ef4444; }
+    .card[data-score="8"], .card[data-score="7"] { border-left: 3px solid #f59e0b; }
+    .card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .entity-badge {
+      font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+      background: var(--canvas); border: 1px solid var(--line); padding: 4px 9px; border-radius: 7px;
+    }
+    .author { flex: 1; font-weight: 600; font-size: 14.5px; color: var(--ink); min-width: 0; }
+    .author a { color: inherit; text-decoration: none; }
+    .author a:hover { color: var(--accent); }
+    .headline { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+    .score-badge {
+      color: #fff; padding: 4px 11px; border-radius: 999px;
+      font-size: 12.5px; font-weight: 700; white-space: nowrap;
+      box-shadow: 0 2px 6px rgba(15,23,42,.14);
+    }
+    .snippet { font-size: 14px; color: var(--ink-soft); line-height: 1.62; margin: 10px 0 12px; }
+    .meta { display: flex; gap: 14px; font-size: 12px; color: var(--faint); margin: 6px 0 10px; flex-wrap: wrap; }
+    .signals { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+    .signal {
+      background: var(--accent-soft); color: var(--accent);
+      padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 500;
+    }
+    .pitch-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+    .pitch-label {
+      font-size: 10.5px; color: var(--faint); text-transform: uppercase;
+      letter-spacing: .07em; font-weight: 600;
+    }
+    .pitch-pill { color: #fff; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+    .region-row { margin: 10px 0 4px; }
+    .region-tag {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0;
+      padding: 3px 11px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    }
+    .region-tag.unmapped { background: #f8fafc; color: var(--faint); border-color: var(--line-strong); }
+    .filters .region-group { display: inline-flex; gap: 9px; flex-wrap: wrap; align-items: center; }
+    .filters .region-label {
+      font-size: 10.5px; color: var(--faint); text-transform: uppercase;
+      letter-spacing: .07em; font-weight: 600; margin-right: 2px;
+    }
+    .filter-btn.region-btn.region-active {
+      background: #0f766e; border-color: #0f766e; color: #fff;
+      box-shadow: 0 6px 14px rgba(15,118,110,.22);
+    }
+    .post-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-top: auto; padding-top: 14px;
+      color: var(--accent); text-decoration: none;
+      font-size: 13px; font-weight: 600; transition: gap .18s ease, color .18s ease;
+    }
+    .post-link:hover { gap: 10px; color: #4338ca; }
+    .hidden { display: none !important; }
+
+    @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } .header h1 { font-size: 26px; } }
+    </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="eyebrow">⚡ Sales Intelligence</div>
+    <h1>LinkedIn Sales Pipeline</h1>
+    <div class="meta">
+      <span><strong>Keywords:</strong> Quick Scan (All Services)</span>
+      <span class="dot">·</span>
+      <span><strong>Timeline:</strong> 1day</span>
+      <span class="dot">·</span>
+      <span><strong>Generated:</strong> 2026-07-18 07:03 UTC</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="num">16</div><div class="lbl">Total Posts</div></div>
+    <div class="stat"><div class="num">2</div><div class="lbl">Brand Posts</div></div>
+    <div class="stat"><div class="num">14</div><div class="lbl">Person Posts</div></div>
+    <div class="stat"><div class="num">16</div><div class="lbl">High Intent · 7+</div></div>
+  </div>
+
+  <div class="filters">
+    <button class="filter-btn active" onclick="filterCards('all', this)">All Posts</button>
+    <button class="filter-btn" onclick="filterCards('ent-brand', this)">🏢 Brands</button>
+    <button class="filter-btn" onclick="filterCards('ent-person', this)">👤 People</button>
+    <button class="filter-btn" onclick="filterCards('high', this)">🚨 Score 7+</button>
+    <span class="sep"></span>
+    <button class="filter-btn" onclick="filterCards('seo', this)">🔍 SEO</button>
+    <button class="filter-btn" onclick="filterCards('sem', this)">💸 SEM</button>
+    <button class="filter-btn" onclick="filterCards('smo', this)">📲 SMO</button>
+    <button class="filter-btn" onclick="filterCards('pr', this)">📰 PR</button>
+    <button class="filter-btn" onclick="filterCards('brand', this)">🎨 Brand</button>
+    <button class="filter-btn" onclick="filterCards('film', this)">🎬 Film</button>
+    <button class="filter-btn" onclick="filterCards('creative', this)">✏️ Creative</button>
+    <span class="sep"></span>
+    <span class="region-group">
+      <span class="region-label">Region</span>
+      <button class="filter-btn region-btn region-active" onclick="filterRegion('all', this)">🌍 All</button>
+      <button class="filter-btn region-btn" onclick="filterRegion('india', this)">🇮🇳 India</button>
+      <button class="filter-btn region-btn" onclick="filterRegion('uae', this)">🇦🇪 Dubai/UAE</button>
+      <button class="filter-btn region-btn" onclick="filterRegion('saudi', this)">🇸🇦 Saudi</button>
+      <button class="filter-btn region-btn" onclick="filterRegion('uk', this)">🇬🇧 UK</button>
+      <button class="filter-btn region-btn" onclick="filterRegion('us', this)">🇺🇸 US</button>
+      <button class="filter-btn region-btn" onclick="filterRegion('europe', this)">🇪🇺 Europe</button>
+      <button class="filter-btn region-btn" onclick="filterRegion('unmapped', this)">❓ Unmapped</button>
+    </span>
+  </div>
+
+  <div class="grid" id="grid">
+
+        <div class="card" data-score="10" data-type="person" data-services="seo smo pr media" data-region="india">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/asthajain0723?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAD98NAkBdcYj9jNTk-CgN0cBdM_Nk-r0osg" target="_blank" style="color:inherit">Astha Jain</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">Founder @hiresolva | Recruitment & Staffing Partner for QSR, Retail, FMCG & F&B Brands | PAN India H</div>
+          <div class="snippet">🚀 Companies Hiring? Let’s Connect!
+
+Looking for a reliable IT & Non-IT Recruitment Partner?
+
+HireSolva provides fast, quality hiring support across PAN India, with strong hiring expertise in Maharashtra, Mumbai & Delhi.
+
+We hire for: QSR | Retail | FMCG | Hospitality | E-commerce | Logistics | Manufacturing | BPO | Sales | Operations | Corporate | IT & Non-IT | Entry-Level | Mid-Level | Leadership…</div>
+          <div class="meta">
+            <span class="time">⏱ 22 minutes ago</span>
+            <span class="engage">👍 3 · 💬 0 · 🔁 2</span>
+            <span class="kw">🔑 looking for AI agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">🗺️ Market Expansion</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#10b981">SEO</span> <span class="pitch-pill" style="background:#8b5cf6">SMO</span> <span class="pitch-pill" style="background:#3b82f6">PR</span> <span class="pitch-pill" style="background:#06b6d4">Media</span></div>
+          <div class="region-row"><span class="region-tag">🇮🇳 India</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/asthajain0723_hiresolva-indias-trusted-recruitment-agency-activity-7483814257583824896-wPKo" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/leannefarleigh?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAABL-OacBrwTKhLrbZsWyRe8a141xGY4FTIc" target="_blank" style="color:inherit">Leanne Farleigh</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">Head of Production</div>
+          <div class="snippet">Looking for a casting specialist (or agency) who can street cast / source from local community groups.
+
+We're building a rotating pool of real people, 60+, for ongoing content with a warm, feel-good tone — think community groups, local clubs, everyday characters rather than actors or models. 
+
+Comfortable on camera is a must, but authenticity over polish is the whole point. Nothing set in stone on…</div>
+          <div class="meta">
+            <span class="time">⏱ 24 minutes ago</span>
+            <span class="engage">👍 0 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking for AI agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span></div>
+          
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/leannefarleigh_looking-for-a-casting-specialist-or-agency-activity-7483813891764981760-eeGX" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="creative film" data-region="india">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/diwa-v-b1ab14212?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAADXqFkYBFd0N4lEpq8e507Xp_UvxbQ4Yr-Y" target="_blank" style="color:inherit">Diwa V</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">HR Professional | Building High Performing Teams & Fostering Inclusive Culture</div>
+          <div class="snippet">📢 Looking for a Freelance Graphic Designer / Graphic Design Agency!
+
+I’m looking to collaborate with a freelance graphic designer or a creative agency for ongoing, day-to-day creative requirements, including:
+- Social media posts
+- Reels and other creative content
+- Ongoing graphic design requirements
+
+📍 Location: Surat, Gujarat
+Note: Specifically looking to collaborate with freelancers or agencie…</div>
+          <div class="meta">
+            <span class="time">⏱ 26 minutes ago</span>
+            <span class="engage">👍 4 · 💬 0 · 🔁 2</span>
+            <span class="kw">🔑 looking for design agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">🎬 Film / Video Production Need</span> <span class="signal">✏️ Creative / Design Need</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#f97316">Creative</span> <span class="pitch-pill" style="background:#ef4444">Film</span></div>
+          <div class="region-row"><span class="region-tag">🇮🇳 India</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/diwa-v-b1ab14212_looking-for-a-freelance-graphic-designer-activity-7483813049217445888-8HnK" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="pr brand creative film" data-region="uk">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/william-m-03934160?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAAzdLu0Bu6zVX4MIZff2svOVW4CjeKiPm0c" target="_blank" style="color:inherit">William M.</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">Marketing, Commercial and Operational Strategy</div>
+          <div class="snippet">Calling UK-based branding partners 📣
+
+I’m looking to connect with an experienced branding agency or consultant to collaborate with me on an exciting rebrand project.
+
+You must:
+• Be based in the UK  
+• Have a strong, proven track record of delivering successful rebrand projects  
+• Bring strategic thinking alongside outstanding creative execution  
+• Be confident managing a rebrand from discovery …</div>
+          <div class="meta">
+            <span class="time">⏱ 43 minutes ago</span>
+            <span class="engage">👍 1 · 💬 3 · 🔁 1</span>
+            <span class="kw">🔑 looking for branding agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">🎨 Rebranding / Brand Refresh</span> <span class="signal">📰 PR / Media Relations Need</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#3b82f6">PR</span> <span class="pitch-pill" style="background:#ec4899">Brand</span> <span class="pitch-pill" style="background:#f97316">Creative</span> <span class="pitch-pill" style="background:#ef4444">Film</span></div>
+          <div class="region-row"><span class="region-tag">🇬🇧 United Kingdom</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/william-m-03934160_branding-rebrand-brandstrategy-activity-7483808739809112064-meqb" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="creative film" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/afroz-s-518021208?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAADSvK6QBtNMLYBheWgw3_uqdzCOmt2WN4TM" target="_blank" style="color:inherit">AFROZ S</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">Project Lead</div>
+          <div class="snippet">🚀 Looking for a Technical Co-Founder
+
+I'm currently building a technology startup focused on solving a major real-world problem in the mobility space.
+
+Over the past several months, I've been researching the market, validating the problem, and developing a clear product vision, business strategy, branding, and go-to-market plan. I'm now looking for a passionate Technical Co-Founder to help bring t…</div>
+          <div class="meta">
+            <span class="time">⏱ 52 minutes ago</span>
+            <span class="engage">👍 0 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking for branding agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">🎬 Film / Video Production Need</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#f97316">Creative</span> <span class="pitch-pill" style="background:#ef4444">Film</span></div>
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/afroz-s-518021208_startup-cofounder-techstartup-activity-7483806562025844736-OKno" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="brand" data-services="" data-region="india">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#06b6d4">🏢 BRAND</div>
+            <div class="author"><a href="https://www.linkedin.com/company/intellihub-it-solutions/posts" target="_blank" style="color:inherit">Intellihub IT Solutions</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">103 followers</div>
+          <div class="snippet">Looking for a tech partner you can actually trust?  The search ends today. 
+
+Most businesses get stuck in the gap between a great idea and the technical execution. You find a developer for an app, but then you need a separate team for cloud migration. Then another agency for digital marketing. It slows you down, drains your budget, and introduces endless hassle. What if one reliable partner could …</div>
+          <div class="meta">
+            <span class="time">⏱ 1 hour ago</span>
+            <span class="engage">👍 1 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking to partner with a digital agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span></div>
+          
+          <div class="region-row"><span class="region-tag">🇮🇳 India</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/intellihub-it-solutions_looking-for-a-tech-partner-you-can-actually-activity-7483792627684016128-9FNK" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/marwan-hussien-11447041a?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAGp_x6ABdWi64OxUopa3gSbQtN4hloezbhE" target="_blank" style="color:inherit">Marwan Hussien</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">--</div>
+          <div class="snippet">🚀 Looking to Connect with Marketing Agencies, SaaS Companies, Recruiters & Sales Teams
+I'm looking to partner with businesses that rely on high-quality B2B outreach and lead generation.
+I have access to a database of 6,000+ business owners based in Montreal, Quebec, Canada, which may be valuable for organizations looking to expand their pipeline, generate qualified leads, or reach decision-makers …</div>
+          <div class="meta">
+            <span class="time">⏱ 2 hours ago</span>
+            <span class="engage">👍 1 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking to partner with a digital agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span></div>
+          
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/marwan-hussien-11447041a_leadgeneration-b2b-sales-activity-7483787289869938688-sALb" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="smo creative film" data-region="india">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/rajat-dikshit-2442759b?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAABU34hQBLLE3Zz3fitdTtGZProQ4dkt5LB4" target="_blank" style="color:inherit">Rajat Dikshit</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">Comedian 🎤 200+ stand-up shows 🎓 Corporate workshops</div>
+          <div class="snippet">🎭 Looking to Collaborate with Influencer Marketing & Creator Agencies
+
+I'm currently building a recurring stand-up comedy show series in Delhi/NCR and am looking to partner with influencer marketing agencies, creator management firms, and creative marketing agencies.
+
+Here's the idea:
+I'll host a special comedy show featuring your creators, team, or invited guests. In return, we create content tha…</div>
+          <div class="meta">
+            <span class="time">⏱ 2 hours ago</span>
+            <span class="engage">👍 1 · 💬 1 · 🔁 0</span>
+            <span class="kw">🔑 looking for influencer marketing agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">📲 Social Media / SMO Need</span> <span class="signal">🎬 Film / Video Production Need</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#8b5cf6">SMO</span> <span class="pitch-pill" style="background:#f97316">Creative</span> <span class="pitch-pill" style="background:#ef4444">Film</span></div>
+          <div class="region-row"><span class="region-tag">🇮🇳 India</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/rajat-dikshit-2442759b_looking-to-collaborate-with-influencer-activity-7483783647397900288-QrUS" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="seo sem smo pr brand creative media film" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/govind-soni-10677354?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAAuA39YBPPQ6Eir_DCd2h7y66dMwtlM8IlI" target="_blank" style="color:inherit">Govind Soni</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">Partner & CBO at Ariscent Lifescineces Pvt Ltd.. Ex- ElasticRun | Havmor Icecream | Carrefour | Mert</div>
+          <div class="snippet">🚀 Looking for a Social Media & Digital Growth Partner
+
+We’re an emerging FMCG brand looking for a startup‑minded social media / digital marketing partner who wants to grow with us – not just work for us.
+If you are an early‑stage agency or an independent digital marketer building your own practice, this could be the right launchpad for you.
+
+🔥 What you’ll lead
+📱 End‑to‑end social media handling (I…</div>
+          <div class="meta">
+            <span class="time">⏱ 4 hours ago</span>
+            <span class="engage">👍 13 · 💬 5 · 🔁 0</span>
+            <span class="kw">🔑 looking for influencer marketing agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">📣 Campaign Planning</span> <span class="signal">🌐 Digital Transformation</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#10b981">SEO</span> <span class="pitch-pill" style="background:#f59e0b">SEM</span> <span class="pitch-pill" style="background:#8b5cf6">SMO</span> <span class="pitch-pill" style="background:#3b82f6">PR</span> <span class="pitch-pill" style="background:#ec4899">Brand</span> <span class="pitch-pill" style="background:#f97316">Creative</span> <span class="pitch-pill" style="background:#06b6d4">Media</span> <span class="pitch-pill" style="background:#ef4444">Film</span></div>
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/govind-soni-10677354_socialmedia-digitalmarketing-marketing-activity-7483755791334965249-hoYd" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="10" data-type="person" data-services="sem smo pr brand creative media film" data-region="us">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/angelita-valdez-lmsw-caadc-rpt-s-ccs-914269a1?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAABWSz-ABUs3bp7H8FWq2qMyaXmrjTGP2C0A" target="_blank" style="color:inherit">Angelita Valdez, LMSW, CAADC, RPT-S, CCS</a></div>
+            <div class="score-badge" style="background:#ef4444">10/10</div>
+          </div>
+          <div class="headline">Serial Entrepreneur</div>
+          <div class="snippet">🚨 We’re preparing to introduce 
+Fuerza Divina Tequila  to the United States in November 2026 and we’re looking for creative partners, recommendations, and connections to help us tell our story.
+
+Fuerza Divina is a Latina-founded, women-owned premium tequila brand crafted in Tequila, Jalisco, from 100% Blue Weber agave. Our journey is rooted in culture, authenticity, entrepreneurship, and the divin…</div>
+          <div class="meta">
+            <span class="time">⏱ 12 hours ago</span>
+            <span class="engage">👍 2 · 💬 1 · 🔁 0</span>
+            <span class="kw">🔑 looking for experiential marketing agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">📣 Campaign Planning</span> <span class="signal">📲 Social Media / SMO Need</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#f59e0b">SEM</span> <span class="pitch-pill" style="background:#8b5cf6">SMO</span> <span class="pitch-pill" style="background:#3b82f6">PR</span> <span class="pitch-pill" style="background:#ec4899">Brand</span> <span class="pitch-pill" style="background:#f97316">Creative</span> <span class="pitch-pill" style="background:#06b6d4">Media</span> <span class="pitch-pill" style="background:#ef4444">Film</span></div>
+          <div class="region-row"><span class="region-tag">🇺🇸 United States</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/angelita-valdez-lmsw-caadc-rpt-s-ccs-914269a1_fuerza-divina-tequila-premium-latina-founded-activity-7483633402055639041-ZOQ4" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="9" data-type="person" data-services="" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/rohit-dhar-64a6674?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAADPINoB_225xlPO6BNWC86WJsJ8lQpxza4" target="_blank" style="color:inherit">Rohit Dhar</a></div>
+            <div class="score-badge" style="background:#ef4444">9/10</div>
+          </div>
+          <div class="headline">Building@FashionEntrepreneurFund</div>
+          <div class="snippet">We're looking for driven Sponsorship Sales Managers to secure brand partnerships for premium OTT, YouTube, and digital content. If you have relevant experience of 5 years + a strong network with brands and media agencies, excel at closing sponsorship deals, and thrive in a target-driven environment, this is your opportunity to work on high-impact entertainment projects. Join us to create innovativ…</div>
+          <div class="meta">
+            <span class="time">⏱ 30 minutes ago</span>
+            <span class="engage">👍 1 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking for digital agencies</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span></div>
+          
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/rohit-dhar-64a6674_fashionentrepreneurfund-activity-7483813606304890880-7KKo" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="9" data-type="person" data-services="pr" data-region="india">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/trisha-chakravorty?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAAQeCnMBhE4O0NBPVPG_ZYcO_gyarUYveyU" target="_blank" style="color:inherit">Trishha Chakravorty</a></div>
+            <div class="score-badge" style="background:#ef4444">9/10</div>
+          </div>
+          <div class="headline">Corporate Reputation Architect | Bellona Hospitality, Ex‑TOI Journalist | C‑Suite PR Strategist | Mi</div>
+          <div class="snippet">Dear LinkedIn connections,
+
+We're looking for a PR agency to partner with Bellona Hospitality Services Limited - the F&B arm of The Phoenix Mills Group.
+What are we looking for?
+·      PR strategy, media outreach, and media relations for Bellona Hospitality and our brands: Ishaara, Dobaraa, Eight, CHA, Allora Milano, and Legume
+·      Lifestyle PR and compelling storytelling
+Where do we need PR su…</div>
+          <div class="meta">
+            <span class="time">⏱ 32 minutes ago</span>
+            <span class="engage">👍 0 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking for PR agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">📰 PR / Media Relations Need</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#3b82f6">PR</span></div>
+          <div class="region-row"><span class="region-tag">🇮🇳 India</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/trisha-chakravorty_dear-linkedin-connections-were-looking-activity-7483812786679164929-QE0y" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="9" data-type="person" data-services="seo sem pr brand media" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/dudekula-vasanth-041456315?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAE_6fbEBGJhLDypB8egQDy_VtCh-Qz92tY8" target="_blank" style="color:inherit">dudekula vasanth</a></div>
+            <div class="score-badge" style="background:#ef4444">9/10</div>
+          </div>
+          <div class="headline">Computer Science Graduate</div>
+          <div class="snippet">🚀 **Looking for New Project Collaborations | IT Services | Software Development**
+
+Hello LinkedIn Connections,
+
+I hope you're all doing well.
+
+I'm happy to be part of **CloudStepIn Technologies Pvt. Ltd.**, where we help businesses build, modernize, and manage their technology solutions with a team backed by extensive industry expertise.
+
+We are currently looking to collaborate with startups, SMEs…</div>
+          <div class="meta">
+            <span class="time">⏱ 42 minutes ago</span>
+            <span class="engage">👍 1 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking for digital marketing partner</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">💰 Funding Received (Budget Available)</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#10b981">SEO</span> <span class="pitch-pill" style="background:#f59e0b">SEM</span> <span class="pitch-pill" style="background:#3b82f6">PR</span> <span class="pitch-pill" style="background:#ec4899">Brand</span> <span class="pitch-pill" style="background:#06b6d4">Media</span></div>
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/dudekula-vasanth-041456315_softwaredevelopment-webdevelopment-cloudcomputing-activity-7483809055522840576-cH99" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="9" data-type="brand" data-services="" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#06b6d4">🏢 BRAND</div>
+            <div class="author"><a href="https://www.linkedin.com/company/protocloud-tech/posts" target="_blank" style="color:inherit">Protocloud Technologies - Website & Mobile App Development Service provider</a></div>
+            <div class="score-badge" style="background:#ef4444">9/10</div>
+          </div>
+          <div class="headline">6,508 followers</div>
+          <div class="snippet">Is your web agency a green flag or a red flag?
+
+-Choosing the wrong agency can cost you time, money, and missed opportunities.
+
+At Protocloud Technologies, we don't just build websites, we build long-term business success.
+
+ Looking for a trusted technology partner? Let's talk.
+
+#WebDevelopment #WebsiteDesign #BusinessGrowth #DigitalTransformation #WebAgency #WebsiteDevelopment #SmallBusiness #Sta…</div>
+          <div class="meta">
+            <span class="time">⏱ 1 hour ago</span>
+            <span class="engage">👍 1 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking for web development agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span></div>
+          
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/protocloud-tech_webdevelopment-websitedesign-businessgrowth-activity-7483800281999245312-qw4D" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="9" data-type="person" data-services="" data-region="">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/deepak-sharma-16b6a2169?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAACglkGMBheHNeTcMHqoBhyq1e0BOQtIesxQ" target="_blank" style="color:inherit">Deepak Sharma</a></div>
+            <div class="score-badge" style="background:#ef4444">9/10</div>
+          </div>
+          <div class="headline">SEO Team Lead at Octal IT Solution (CMMI Level 3 Appraised)</div>
+          <div class="snippet">Real estate investment is evolving—and tokenization is leading the transformation. 🏢🔗
+Looking for the right technology partner to build a secure, scalable, and compliant real estate tokenization platform? We've compiled a list of the Top 10 Real Estate Tokenization Development Agencies in 2026 to help businesses and investors make informed decisions.
+Discover the companies driving innovation in bl…</div>
+          <div class="meta">
+            <span class="time">⏱ 1 hour ago</span>
+            <span class="engage">👍 3 · 💬 0 · 🔁 0</span>
+            <span class="kw">🔑 looking to partner with a digital agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span></div>
+          
+          <div class="region-row"><span class="region-tag unmapped">❓ Unmapped</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/deepak-sharma-16b6a2169_realestatetokenization-blockchaindevelopment-activity-7483799788518416384-227K" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+        <div class="card" data-score="9" data-type="person" data-services="sem smo pr creative media film" data-region="india">
+          <div class="card-header">
+            <div class="entity-badge" style="color:#a855f7">👤 PERSON</div>
+            <div class="author"><a href="https://www.linkedin.com/in/vaibhav-singh-rajput-5795471a1?miniProfileUrn=urn%3Ali%3Afsd_profile%3AACoAAC8-gm0B40dYjS7VwqQ7YI6_MfC3zn6v_UQ" target="_blank" style="color:inherit">Vaibhav Singh Rajput</a></div>
+            <div class="score-badge" style="background:#ef4444">9/10</div>
+          </div>
+          <div class="headline">INFLUENCER - CELEBS MANAGEMENT | UGC CREATION | MEME MARKETING | 5yr+ Experience | 💥 We don’t just p</div>
+          <div class="snippet">🚀 Hiring Performance Marketing Agencies (India)
+
+Brand - Igaming
+
+We're looking to partner with experienced performance marketing agencies for long-term campaigns.
+
+Preferred Expertise:
+• CPA Campaigns
+• FTD/User Acquisition
+• ROI-Focused Performance Marketing
+• Affiliate & Performance Media Buying
+• High-Quality User Acquisition
+• Scalable Performance Campaigns
+
+Requirements:
+• Proven track recor…</div>
+          <div class="meta">
+            <span class="time">⏱ 20 hours ago</span>
+            <span class="engage">👍 2 · 💬 3 · 🔁 0</span>
+            <span class="kw">🔑 looking for media buying agency</span>
+          </div>
+          <div class="signals"><span class="signal">🚨 Actively Seeking Agency Partner</span> <span class="signal">📣 Campaign Planning</span> <span class="signal">💸 Paid Media / SEM Need</span></div>
+          <div class="pitch-row"><span class="pitch-label">Pitch:</span> <span class="pitch-pill" style="background:#f59e0b">SEM</span> <span class="pitch-pill" style="background:#8b5cf6">SMO</span> <span class="pitch-pill" style="background:#3b82f6">PR</span> <span class="pitch-pill" style="background:#f97316">Creative</span> <span class="pitch-pill" style="background:#06b6d4">Media</span> <span class="pitch-pill" style="background:#ef4444">Film</span></div>
+          <div class="region-row"><span class="region-tag">🇮🇳 India</span></div>
+          <a class="post-link" href="https://www.linkedin.com/posts/vaibhav-singh-rajput-5795471a1_hiring-performancemarketing-performanceagency-activity-7483506915994431489-rotX" target="_blank">View LinkedIn Post →</a>
+        </div>
+        
+  </div>
+</div>
+
+<script>
+    // Two independent filter axes, AND-combined on every card.
+    let activeCategory = 'all';
+    let activeRegion = 'all';
+
+    const entityFilters = ['ent-brand','ent-person','ent-article'];
+    const serviceFilters = ['seo','sem','smo','pr','brand','creative','media','film'];
+
+    function matchesCategory(card, type) {
+      const services = (card.dataset.services || '').toLowerCase();
+      return type === 'all'
+        || (type === 'ent-brand'   && card.dataset.type === 'brand')
+        || (type === 'ent-person'  && card.dataset.type === 'person')
+        || (type === 'ent-article' && card.dataset.type === 'article')
+        || (type === 'high'        && parseInt(card.dataset.score) >= 7)
+        || (serviceFilters.includes(type) && services.includes(type));
+    }
+
+    function matchesRegion(card, type) {
+      if (type === 'all') return true;
+      const region = card.dataset.region || '';
+      if (type === 'unmapped') return !region;
+      return region === type;
+    }
+
+    function applyFilters() {
+      document.querySelectorAll('.card').forEach(card => {
+        const show = matchesCategory(card, activeCategory) && matchesRegion(card, activeRegion);
+        card.classList.toggle('hidden', !show);
+      });
+    }
+
+    function filterCards(type, btn) {
+      activeCategory = type;
+      document.querySelectorAll('.filters .filter-btn:not(.region-btn)').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      applyFilters();
+    }
+
+    function filterRegion(type, btn) {
+      activeRegion = type;
+      document.querySelectorAll('.region-btn').forEach(b => b.classList.remove('region-active'));
+      btn.classList.add('region-active');
+      applyFilters();
+    }
+    </script>
+</body>
+</html>
