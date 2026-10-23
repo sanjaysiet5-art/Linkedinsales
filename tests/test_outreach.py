@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.outreach import (
     NAME_PLACEHOLDER, build_prompt, draft_outreach, lead_services, recipient_first_name,
+    subject_company,
 )
 from config.outreach import SENDER
 
@@ -100,7 +101,7 @@ def test_assembly_enforces_greeting_signature_and_real_outcomes():
     }
     out = draft_outreach(JOB, api_key="x", client=FakeClient(reply))
     assert len(out["emails"]) == 2                       # third email dropped
-    assert out["emails"][0]["subject"] == "Your Amazon ops hire"
+    assert out["emails"][0]["subject"] == "Grapes Worldwide × Anta International | Your Amazon ops hire"
     body = out["emails"][0]["body"]
     assert body.startswith(f"Hi {NAME_PLACEHOLDER},\n\nHope you're doing well.")
     assert "We can help, fast." in body and "—" not in body and "!" not in body
@@ -132,4 +133,17 @@ def test_falls_back_when_primary_model_is_overloaded():
     client = BusyThenOk({"emails": [email()], "response": "r"})
     out = draft_outreach(POST, api_key="x", model="primary", client=client)
     assert client.calls[0] == "primary" and client.calls[1] != "primary"
-    assert out["emails"][0]["subject"] == "s"
+    assert out["emails"][0]["subject"] == "Grapes Worldwide × [Company] | s"
+
+
+def test_subject_uses_house_pattern():
+    reply = {"emails": [email(subject="Grapes Worldwide × MN Infotech | White-Label Web & eCommerce Partnership.")],
+             "response": "r"}
+    lead = {**POST, "company": "MN Infotech Pvt. Ltd."}
+    out = draft_outreach(lead, api_key="x", client=FakeClient(reply))
+    assert out["emails"][0]["subject"] == "Grapes Worldwide × MN Infotech | White-Label Web & eCommerce Partnership"
+    assert subject_company({"company": "Suffescom Solutions Inc"}) == "Suffescom Solutions"
+    assert subject_company({"company": "Traders' Hub FZE"}) == "Traders' Hub"
+    assert subject_company({"author": "Scholé (Product Hunt)", "source": "product_hunt"}) == "Scholé"
+    assert subject_company({"company_domain": "www.emori.in"}) == "Emori"
+    assert subject_company({"author": "Abhishek Sharma", "entity_type": "person"}) == "[Company]"

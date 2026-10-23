@@ -32,6 +32,10 @@ MODEL = os.getenv("OUTREACH_MODEL", "gemini-flash-latest")
 # Tried when MODEL is overloaded (503) or rate-limited — Flash 503s under peak demand.
 FALLBACK_MODEL = os.getenv("OUTREACH_FALLBACK_MODEL", "gemini-flash-lite-latest")
 NAME_PLACEHOLDER = "[First name]"
+COMPANY_PLACEHOLDER = "[Company]"
+# House subject format: "Grapes Worldwide × MN Infotech | White-Label Web & eCommerce Partnership".
+# The model writes only the part after "|"; the rest is fixed here.
+SUBJECT_PREFIX = "Grapes Worldwide"
 
 # Regex-derived pitch tags (agent/filter.py) → the 9 service labels.
 _SERVICE_ALIASES = {
@@ -154,7 +158,7 @@ STYLE:
 - The whole email should land at 150-230 words. Plain text.
 - Warm, confident, specific. Indian-English business tone is fine.
 - Vary sentence length. Contractions are fine.
-- Subject line: 4-8 words, specific to the lead, no emojis, no clickbait, no "Re:".
+- subject: ONLY the offer that follows "Grapes Worldwide × <Company> |" (that prefix is added automatically). 3-7 words, Title Case, naming the specific partnership or service for this lead, e.g. "White-Label Web & eCommerce Partnership", "SEO & AEO Growth Partnership", "FTE Contract Staffing for Brand Manager". No company names, no emojis, no "Re:".
 - Never use: em dashes, "I hope this email finds you well", "I wanted to reach out", "delve", "leverage", "synergy", "elevate", "unlock", "game-changer", "cutting-edge", "seamless", "robust", "in today's fast-paced", "look no further", "tailored solutions", exclamation marks.
 
 FACTS (hard rules):
@@ -201,6 +205,30 @@ Put it in the `response` field. Same fact rules and banned phrases apply."""
 
 
 # ─── Assembly ────────────────────────────────────────────────────────────────
+_LEGAL_SUFFIX = re.compile(r"[\s,]+(pvt\.?|private|ltd\.?|limited|inc\.?|llc|llp|co\.|corp\.?|"
+                           r"corporation|gmbh|plc|fze|fzco|fz-llc)\b.*$", re.I)
+
+
+def subject_company(lead: dict) -> str:
+    """Company name for the subject, without legal suffixes ("MN Infotech Pvt Ltd" → "MN Infotech")."""
+    name = (lead.get("company") or "").strip()
+    if not name and (lead.get("entity_type") in ("company", "brand")
+                     or (lead.get("source") or "") in ("linkedin_job", "funding_news",
+                                                       "product_hunt", "meta_ads")):
+        name = re.sub(r"\(.*?\)", "", lead.get("author") or "").strip()
+    name = _LEGAL_SUFFIX.sub("", re.sub(r"\(.*?\)", "", name)).strip(" ,.-")
+    if not name and lead.get("company_domain"):
+        name = lead["company_domain"].removeprefix("www.").split(".")[0].capitalize()
+    return name or COMPANY_PLACEHOLDER
+
+
+def _subject(lead: dict, e: "_Email") -> str:
+    offer = _clean(e.subject).split("|")[-1]
+    offer = re.sub(rf"^\s*{SUBJECT_PREFIX}\b.*?[×x]\s*\S.*$", "", offer, flags=re.I) or offer
+    offer = offer.strip(" .") or _clean(e.angle)
+    return f"{SUBJECT_PREFIX} × {subject_company(lead)} | {offer}"
+
+
 def _clean(text: str) -> str:
     """Strip the em/en dashes and exclamation marks models slip in despite the instruction."""
     text = re.sub(r"\s*[—–]\s*", ", ", text or "")
@@ -260,7 +288,7 @@ def assemble(lead: dict, drafts: _Drafts) -> dict:
         "recipient": recipient_first_name(lead),
         "to": (lead.get("recipient") or {}).get("email") or lead.get("contact_email") or "",
         "emails": [
-            {"angle": _clean(e.angle), "subject": _clean(e.subject).rstrip("."),
+            {"angle": _clean(e.angle), "subject": _subject(lead, e),
              "body": _email_body(lead, e)}
             for e in emails
         ],

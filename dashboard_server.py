@@ -990,8 +990,10 @@ def index() -> Response:
 
     function renderDrafts(d, cid, lead) {
       const toLine = d.to ? '<div class="draft-note">To: <b>' + esc(d.to) + '</b></div>' : '';
-      const note = d.recipient ? toLine :
-        '<div class="draft-note">No contact name on this lead: replace <b>[First name]</b> before sending.</div>';
+      const coNote = d.emails.some(e => e.subject.includes('[Company]'))
+        ? '<div class="draft-note">No company name on this lead: replace <b>[Company]</b> in the subject before sending.</div>' : '';
+      const note = coNote + (d.recipient ? toLine :
+        '<div class="draft-note">No contact name on this lead: replace <b>[First name]</b> before sending.</div>');
       const emails = d.emails.map((e, n) => {
         const id = cid + '-e' + n;
         const title = d.emails.length > 1 ? 'Email ' + (n + 1) + ' · ' + esc(e.angle) : 'Email · ' + esc(e.angle);
