@@ -634,6 +634,8 @@ def index() -> Response:
     .kc-role { font-size:10.5px; font-weight:600; padding:1px 6px; border-radius:8px; background:var(--accent); color:#fff; }
     .kc-dim { color:#888; font-size:11.5px; }
     .kc-pick { cursor:pointer; }
+    .kc-li { font-size:11.5px; margin-top:2px; }
+    .kc-li a { color:var(--accent); text-decoration:none; }
     .contacts-container { margin-top:8px; }
     .draft-btn {
       width: 100%; margin-top: 10px; padding: 9px 12px; border-radius: 9px; cursor: pointer;
@@ -864,7 +866,14 @@ def index() -> Response:
       }
       const rows = st.contacts.map((c, n) => {
         const name = esc(c.first_name + ' ' + (c.last_name || ''));
-        const li = c.linkedin_url ? ' <a href="' + esc(c.linkedin_url) + '" target="_blank">in</a>' : '';
+        const pub = /linkedin[.]com[/]in[/](?!ACwAA)/.test(c.linkedin_url || '');
+        const li = pub
+          ? '<div class="kc-li"><a href="' + esc(c.linkedin_url) + '" target="_blank">🔗 '
+            + esc(c.linkedin_url.replace(/^https?:[/][/](www[.])?/, '')) + '</a></div>'
+          : (c.linkedin_url || c.linkedin_search_url)
+            ? '<div class="kc-li"><a href="' + esc(c.linkedin_url || c.linkedin_search_url) + '" target="_blank">🔎 '
+              + (c.linkedin_url ? 'LinkedIn profile (internal link)' : 'Find on LinkedIn') + '</a></div>'
+            : '';
         let contact;
         if (c.revealed_at) {
           const email = c.email
@@ -879,8 +888,8 @@ def index() -> Response:
         } else {
           contact = '<button class="copy-btn" onclick="revealKc(' + idx + ',' + n + ', this)">Reveal email &amp; mobile (1 credit)</button>';
         }
-        return '<div class="kc-row"><div><span class="kc-role">' + esc(c.role) + '</span> <b>' + name + '</b>' + li
-          + '<div class="kc-dim">' + esc(c.title || '') + ' · via ' + esc(c.source) + '</div></div>'
+        return '<div class="kc-row"><div><span class="kc-role">' + esc(c.role) + '</span> <b>' + name + '</b>'
+          + '<div class="kc-dim">' + esc(c.title || '') + ' · via ' + esc(c.source) + '</div>' + li + '</div>'
           + '<div>' + contact + '</div></div>';
       }).join('');
       box.innerHTML = rows

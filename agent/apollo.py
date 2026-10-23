@@ -38,12 +38,14 @@ class ApolloClient:
             logger.error(f"Apollo match_person error: {e}")
         return None
 
-    def match_person_by_name(self, first_name, last_name, domain, webhook_url=None):
+    def match_person_by_name(self, first_name, last_name, domain, webhook_url=None, linkedin_url=None):
         """people/match by name + company domain (for Apify-found people with no Apollo id)."""
         if not self.is_enabled():
             return None
         payload = {"first_name": first_name, "last_name": last_name, "domain": domain,
                    "reveal_personal_emails": False}
+        if linkedin_url:
+            payload["linkedin_url"] = linkedin_url
         if webhook_url:
             payload["reveal_phone_number"] = True
             payload["webhook_url"] = webhook_url

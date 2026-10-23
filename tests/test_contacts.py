@@ -41,14 +41,19 @@ class FakeApollo:
         self.reveals.append(("id", pid, webhook_url))
         return self.person
 
-    def match_person_by_name(self, first, last, domain, webhook_url=None):
+    def match_person_by_name(self, first, last, domain, webhook_url=None, linkedin_url=None):
         self.reveals.append(("name", f"{first} {last}", webhook_url))
         return self.person
+
+
+GOOGLE_CALLS = []
 
 
 @pytest.fixture(autouse=True)
 def tmp_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(contacts, "CACHE_PATH", str(tmp_path / "contacts_cache.json"))
+    GOOGLE_CALLS.clear()
+    monkeypatch.setattr(contacts, "_google_pages", lambda qs, token: GOOGLE_CALLS.append(qs) or [])
     monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
 
@@ -83,7 +88,7 @@ def test_apify_fallback_only_when_apollo_is_thin(monkeypatch):
     thin = FakeApollo({"CEO": [ap("1", "Shradha", "Co-Founder & Global CEO")]})
     res = contacts.find_key_contacts({"company_domain": "acme.com"}, apollo=thin, apify_token="t")
     assert calls == ["http://www.linkedin.com/company/acme"]
-    assert res["sources"] == ["apollo", "apify"]
+    assert res["sources"][:2] == ["apollo", "apify"]
     assert {c["role"] for c in res["contacts"]} == {"CEO", "CMO"}
 
     calls.clear()
@@ -174,3 +179,87 @@ def test_profile_named_after_company_is_dropped(monkeypatch):
     res = contacts.find_key_contacts({"company_domain": "reelotek.com", "company": "Reelotek"},
                                      apollo=fake, apify_token="t")
     assert [c["first_name"] for c in res["contacts"]] == ["Manav"]
+
+
+
+def page(query, *results):
+    return {"searchQuery": {"term": query},
+            "organicResults": [{"url": u, "title": t, "description": d} for u, t, d in results]}
+
+
+def test_linkedin_profile_found_for_masked_apollo_contact(monkeypatch):
+    # Real Google results captured 2026-10-23 for suffescom.com.
+    def google(qs, token):
+        GOOGLE_CALLS.append(qs)
+        return [page(qs[0],
+                     ("https://in.linkedin.com/in/rakesh-kumar-gupta-8618b5171", "Rakesh kumar Gupta - Software Engineer", "Suffescom"),
+                     ("https://in.linkedin.com/in/gurpreet-singh-walia", "Gurpreet Singh W. - CEO at Suffescom Solutions Pvt. Ltd.", "")),
+                page(qs[1],
+                     ("https://in.linkedin.com/in/sushil-x", "Sushil Kumar - COO at Acme", "Acme"),
+                     ("https://in.linkedin.com/in/sushmachandel?trk=x", "Sush C. - Suffescom Solutions Inc", ""))]
+    monkeypatch.setattr(contacts, "_google_pages", google)
+    fake = FakeApollo({"CEO": [{"id": "1", "first_name": "Gurpreet", "last_name_obfuscated": "Si***h",
+                                "title": "Chief Executive Officer", "has_email": True}],
+                       "COO": [{"id": "2", "first_name": "Sush", "last_name_obfuscated": "Ch***l",
+                                "title": "Chief Operating Officer", "has_email": True}]})
+    res = contacts.find_key_contacts({"company_domain": "suffescom.com", "company": "Suffescom Solutions Inc"},
+                                     apollo=fake, apify_token="t")
+    links = {c["first_name"]: c["linkedin_url"] for c in res["contacts"]}
+    assert links == {"Gurpreet": "https://www.linkedin.com/in/gurpreet-singh-walia",
+                     "Sush": "https://www.linkedin.com/in/sushmachandel"}
+    assert len(GOOGLE_CALLS) == 1 and len(GOOGLE_CALLS[0]) == 2     # one run per company
+    assert GOOGLE_CALLS[0][0].startswith('site:linkedin.com/in "Gurpreet" "Suffescom Solutions Inc"')
+
+    contacts.find_key_contacts({"company_domain": "suffescom.com"}, apollo=fake, apify_token="t")
+    assert len(GOOGLE_CALLS) == 1                                    # cached, not re-searched
+
+
+def test_no_match_falls_back_to_linkedin_search_link(monkeypatch):
+    monkeypatch.setattr(contacts, "_google_pages", lambda qs, token: [
+        page(qs[0], ("https://in.linkedin.com/in/other", "Arushi Mehta - Founder at Different Co", ""))])
+    fake = FakeApollo({"CEO": [ap("1", "Arushi", "Founder & CEO")]})
+    c = contacts.find_key_contacts({"company_domain": "emori.in", "company": "Emori"},
+                                   apollo=fake, apify_token="t")["contacts"][0]
+    assert c["linkedin_url"] == ""
+    assert c["linkedin_search_url"] == "https://www.linkedin.com/search/results/people/?keywords=Arushi%20Emori"
+
+
+def test_apify_internal_id_is_upgraded_to_public_profile(monkeypatch):
+    monkeypatch.setattr(contacts, "_from_apify", lambda url, token: [
+        {"role": "CMO", "title": "CMO", "source": "apify", "first_name": "Aakash", "last_name": "Goel",
+         "masked": False, "apollo_id": "", "has_email": True, "has_phone": False,
+         "linkedin_url": "https://www.linkedin.com/in/ACwAABHFooYB"}])
+    monkeypatch.setattr(contacts, "_google_pages", lambda qs, token: [
+        page(qs[0], ("http://www.linkedin.com/in/aakash-goel-146a3183", "Aakash Goel - CMO - Zomato", ""))])
+    fake = FakeApollo(person={"id": "9", "first_name": "Aakash", "last_name": "Goel", "email": "a@z.com"})
+    res = contacts.find_key_contacts({"company_domain": "zomato.com", "company": "Zomato"},
+                                     apollo=fake, apify_token="t")
+    c = res["contacts"][0]
+    assert c["linkedin_url"] == "https://www.linkedin.com/in/aakash-goel-146a3183"
+    assert c["internal_linkedin_url"].endswith("ACwAABHFooYB")
+
+
+def test_old_cache_entries_get_links_once(monkeypatch):
+    fake = FakeApollo({"CEO": [ap("1", "Shradha", "CEO")]})
+    contacts.find_key_contacts({"company_domain": "acme.com"}, apollo=fake, apify_token="")
+    cache = contacts._load()
+    for c in cache["companies"]["acme.com"]["contacts"]:
+        c.pop("linkedin_checked", None)                               # as cached before this feature
+    contacts._save(cache)
+    contacts.find_key_contacts({"company_domain": "acme.com"}, apollo=fake, apify_token="t")
+    contacts.find_key_contacts({"company_domain": "acme.com"}, apollo=fake, apify_token="t")
+    assert len(GOOGLE_CALLS) == 1
+
+
+def test_last_name_prefix_must_agree():
+    c = {"first_name": "Ahmed", "last_name": "Ay***b", "role": "COO"}
+    words = {"tradershub", "traders", "hub"}
+    wrong = [{"url": "https://www.linkedin.com/in/ahmed-alkatheeri", "title": "Ahmed Alkatheeri - COO", "description": "Traders Hub"}]
+    right = [{"url": "https://ae.linkedin.com/in/ahmed-ayoub", "title": "Ahmed Ayoub - COO at Traders' Hub", "description": ""}]
+    initial = [{"url": "https://ae.linkedin.com/in/ahmed-a", "title": "Ahmed A. - Traders Hub", "description": ""}]
+    assert contacts._match_profile(c, wrong, words) == ""
+    assert contacts._match_profile(c, right, words) == "https://www.linkedin.com/in/ahmed-ayoub"
+    assert contacts._match_profile(c, initial, words) == "https://www.linkedin.com/in/ahmed-a"
+    middle = {"first_name": "Gurpreet", "last_name": "Si***h", "role": "CEO"}
+    assert contacts._match_profile(middle, [{"url": "https://in.linkedin.com/in/gurpreet-singh-walia",
+        "title": "Gurpreet Singh W. - CEO at Suffescom", "description": ""}], {"suffescom"})
