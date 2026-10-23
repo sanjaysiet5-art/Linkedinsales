@@ -8,3 +8,4 @@ outputs/pipeline_*.csv
 outputs/pipeline_*.html
 outputs/linkedin_urls_*.html
 data/verifier_cache.jsonl
+data/contacts_cache.json

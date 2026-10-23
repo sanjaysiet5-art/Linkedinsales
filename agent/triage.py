@@ -242,6 +242,16 @@ def _to_record(post) -> dict:
             "region": post.get("region", ""),
             "pitch_services": post.get("pitch_services", []),
             "moment_signals": post.get("moment_signals", []),
+            "contact_email": post.get("contact_email", ""),
+            "contact_phone": post.get("contact_phone", ""),
+            "company_domain": post.get("company_domain", ""),
+            "company_size": post.get("company_size", ""),
+            "company_funding": post.get("company_funding", ""),
+            "company_tech_stack": post.get("company_tech_stack", []),
+            "apollo_contact_id": post.get("apollo_contact_id", ""),
+            "source": post.get("source", ""),
+            "hooks": post.get("hooks", []),
+            "decision_makers": post.get("decision_makers", []),
             "marked_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         }
     # LinkedInPost instance
@@ -258,5 +268,13 @@ def _to_record(post) -> dict:
         "region": getattr(post, "region", ""),
         "pitch_services": post.pitch_services,
         "moment_signals": post.moment_signals,
+        "contact_email": getattr(post, "contact_email", ""),
+        "contact_phone": getattr(post, "contact_phone", ""),
+        "company_domain": getattr(post, "company_domain", ""),
+        "company_size": getattr(post, "company_size", ""),
+        "company_funding": getattr(post, "company_funding", ""),
+        "company_tech_stack": getattr(post, "company_tech_stack", []),
+        "apollo_contact_id": getattr(post, "apollo_contact_id", ""),
         "marked_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
     }
+

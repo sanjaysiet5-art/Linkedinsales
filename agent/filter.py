@@ -349,11 +349,18 @@ def classify_intent(post: LinkedInPost) -> dict | None:
         if _SEEK_AGENCY.search(text) and (_RFP.search(text) or _BUDGET.search(text)):
             secondary = True
 
-    if not (primary or secondary):
+    # TERTIARY — "can anyone recommend a good SEO agency" / "agency
+    # recommendations". Scored 8 per the module docstring; the marketing-service
+    # gate above has already run, so "recommend a staffing agency" can't fire.
+    recommend = not (primary or secondary) and bool(_RECOMMEND_ASK.search(text))
+
+    if not (primary or secondary or recommend):
         return None
 
     if _RFP.search(text):
         base, label, icon = 10, "RFP / Proposals Invited", "📋"
+    elif recommend:
+        base, label, icon = 8, "Asking for Agency Recommendations", "🙋"
     else:
         base, label, icon = 9, "Actively Seeking Agency Partner", "🚨"
 

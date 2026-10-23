@@ -43,6 +43,11 @@ class LinkedInPost:
     company_tech_stack: list[str] = field(default_factory=list)
     decision_makers: list[dict] = field(default_factory=list)
     apollo_contact_id: str = ""
+    # Multi-source fields (see agent/collectors/). LinkedIn posts keep the defaults.
+    source: str = "linkedin_post"      # collector key, e.g. 'linkedin_job', 'meta_ads'
+    intent_mode: str = "explicit"      # 'explicit' = author asks for an agency (regex gates apply)
+                                       # 'signal'   = buying signal (hiring, ad spend, launch…)
+    hooks: list[str] = field(default_factory=list)   # personalization hooks for outreach
 
 
 

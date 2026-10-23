@@ -316,7 +316,8 @@ APIFY_TOKEN = os.getenv("APIFY_API_TOKEN", "")
 APIFY_ACTOR_ID = "harvestapi~linkedin-post-search"
 APIFY_BASE_URL = "https://api.apify.com/v2"
 
-MAX_POSTS_PER_QUERY = 100     # newest-first per keyword; 110 kw × 100 ≈ $16.50/scan max
+MAX_POSTS_PER_QUERY = 100     # upper bound per keyword; the scan budget (config/sources.py) lowers it
+APIFY_POST_PRICE = 0.002      # harvestapi charges $0.002/post (+ $0.001 per query with no result)
 QUERIES_PER_RUN = 20         # keywords batched per actor run
 RUN_POLL_SECONDS = 5         # poll interval while a run is in progress
 RUN_TIMEOUT_SECONDS = 900    # give up on a single run after 15 min
@@ -336,7 +337,7 @@ VERIFIER = {
     # gemini-flash-latest always points at the newest Flash model and avoids the
     # per-model-id quota exhaustion that hit gemini-2.0-flash on our key.
     "MODEL":          os.getenv("VERIFIER_MODEL", "gemini-flash-latest"),
-    "BATCH_SIZE":     int(os.getenv("VERIFIER_BATCH_SIZE", "10")),
+    "BATCH_SIZE":     int(os.getenv("VERIFIER_BATCH_SIZE", "20")),   # fewer calls vs free-tier 5 RPM
     "MIN_CONFIDENCE": int(os.getenv("VERIFIER_MIN_CONFIDENCE", "60")),
-    "MAX_POSTS":      int(os.getenv("VERIFIER_MAX_POSTS", "100")),  # cost cap per run
+    "MAX_POSTS":      int(os.getenv("VERIFIER_MAX_POSTS", "400")),  # cost cap per run (raised for multi-source)
 }

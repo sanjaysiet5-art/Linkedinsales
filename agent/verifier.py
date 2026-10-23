@@ -109,6 +109,31 @@ If is_relevant is true, set `service` to the single best-matching service name f
 Be strict. When in doubt, return is_relevant=false — false negatives are recoverable (the team can still see borderline posts), but false positives erode trust in the tool."""
 
 
+SIGNAL_SYSTEM_PROMPT = """You are a precision B2B lead-qualification engine for a digital agency called Grapesworldwide, which sells: Branding & Designing · AI/3D/CGI · Films & Campaigns · Social Media & Content Strategy · Website Design & Development · SEO · Media Planning & Buying · PR & Influencer Marketing · Events & Activations.
+
+Each item is a BUYING SIGNAL, not a request for an agency. The SOURCE line tells you which kind:
+  • linkedin_job   — a company is hiring an in-house marketing role (budget + need; may outsource instead).
+  • meta_ads       — a brand is running Facebook/Instagram ads (already spending; pitch creative/ROAS).
+  • upwork / freelancer — a client posted a paid project on a freelance marketplace.
+  • product_hunt   — a product just launched (needs growth, brand, content).
+  • funding_news   — a company just raised money (fresh budget).
+
+Return is_relevant=true when ALL of these hold:
+  • The company/client behind the signal would BUY one of the services above (it is a brand, business or startup — not a seller of them).
+  • The signal plausibly creates a need for one of the services within the next few months.
+  • For upwork/freelancer: the project itself is one of the services, and it is a real paid project (not a commission-only, equity-only, "test task", or resale/M&A request).
+
+Return is_relevant=false for:
+  • Marketing / advertising / PR / design / web agencies, freelancers, consultants, staffing & recruitment firms, job boards (they sell, they don't buy).
+  • Signals that aren't about marketing/creative at all (software engineering jobs, data-entry, sales-commission gigs, selling a business).
+  • News that is a roundup/list of many companies, or where no single company raised money.
+  • Government bodies, NGOs asking for grants, and global megabrands (e.g. Accenture, TikTok, Amazon) whose agency rosters are set at HQ.
+
+Also return `company`: the single company behind the signal as a short name (e.g. "Protein Pantry"), or "" if unknown.
+Set `intent_type` to 'signal'. Set `service` to the single best-matching service name (copied exactly) when relevant.
+Be strict — false positives erode trust. When in doubt, is_relevant=false."""
+
+
 # ─── Content hashing (shares the normalization contract with triage.py) ───────
 def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()[:400]
@@ -182,13 +207,16 @@ def _post_payload(p: LinkedInPost) -> str:
     author = (p.author_name or "Unknown").strip()
     headline = (p.author_headline or "").strip()[:160]
     etype = p.entity_type or "person"
-    return f"AUTHOR: {author}\nHEADLINE: {headline}\nTYPE: {etype}\nPOST:\n{snippet}"
+    source = getattr(p, "source", "linkedin_post")
+    hooks = "; ".join(getattr(p, "hooks", [])[:5])
+    return (f"SOURCE: {source}\nAUTHOR: {author}\nHEADLINE: {headline}\nTYPE: {etype}\n"
+            + (f"SIGNALS: {hooks}\n" if hooks else "") + f"POST:\n{snippet}")
 
 
 def _batch_prompt(posts: list[LinkedInPost]) -> str:
     """Build a single prompt that judges BATCH_SIZE posts at once."""
     parts = [
-        "Judge each of the following LinkedIn posts independently. Return a JSON "
+        "Judge each of the following items independently. Return a JSON "
         "array with one verdict object per post, in the SAME ORDER as the inputs. "
         "Use the post's INDEX (0-based) in the `index` field.",
     ]
@@ -211,6 +239,19 @@ class _Indexed(BaseModel):
     intent_type: str = "none"
     reason: str = ""
     budget_mentioned: bool = False
+    company: str = ""
+
+
+def _mode(p: LinkedInPost) -> str:
+    return getattr(p, "intent_mode", "explicit") or "explicit"
+
+
+def _cache_key(p: LinkedInPost) -> str:
+    """Explicit posts keep the original key (existing cache stays valid);
+    signal items are keyed by source too, since they're judged by another rubric."""
+    if _mode(p) == "signal":
+        return _hash(f"signal {getattr(p, 'source', '')} {p.author_name} {p.snippet}")
+    return _hash(p.snippet)
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -262,7 +303,7 @@ def verify_posts(
     needs_judging: list[tuple[int, LinkedInPost]] = []
 
     for idx, p in enumerate(to_verify):
-        h = _hash(p.snippet)
+        h = _cache_key(p)
         if h and h in cache:
             verdicts[idx] = cache[h]
             stats["cached"] += 1
@@ -281,21 +322,38 @@ def verify_posts(
         return _finalize(to_verify, verdicts, overflow, min_confidence, stats)
 
     start = time.monotonic()
-    total_batches = (len(needs_judging) + batch_size - 1) // batch_size
-    for i in range(0, len(needs_judging), batch_size):
-        batch_i = (i // batch_size) + 1
+    # Explicit asks and buying signals are judged by different rubrics, so
+    # they're batched separately (a batch never mixes the two).
+    batches: list[list[tuple[int, LinkedInPost]]] = []
+    for mode in ("explicit", "signal"):
+        group = [(i, p) for i, p in needs_judging if _mode(p) == mode]
+        batches += [group[j:j + batch_size] for j in range(0, len(group), batch_size)]
+    total_batches = len(batches)
+    quota_gone = False
+    for batch_i, batch in enumerate(batches, 1):
+        if quota_gone:
+            for idx, p in batch:
+                _attach_skipped(p, "Gemini daily quota used up — passed through")
+                verdicts[idx] = None
+                stats["skipped"] += 1
+            continue
         if progress_callback:
             try:
                 progress_callback(batch_i, total_batches, 0, "verifying")
             except Exception:
                 pass
-        batch = needs_judging[i:i + batch_size]
         batch_posts = [p for _, p in batch]
+        prompt = SIGNAL_SYSTEM_PROMPT if _mode(batch_posts[0]) == "signal" else SYSTEM_PROMPT
         try:
-            batch_verdicts = _call_gemini(client, model, batch_posts)
+            batch_verdicts = _call_with_retry(client, model, batch_posts, prompt)
             stats["batches"] += 1
         except Exception as e:  # noqa: BLE001 — any failure must fall back gracefully
             stats["errors"] += 1
+            if isinstance(e, _DailyQuotaExhausted):
+                quota_gone = True
+                stats["quota_exhausted"] = True
+                print("  [verifier] Gemini DAILY quota exhausted — remaining batches pass through "
+                      "unverified (enable billing on the Google AI key to lift the free-tier cap)")
             # Mark this whole batch as skipped so the dashboard still shows them.
             batch_verdicts = [None] * len(batch_posts)
             print(f"  [verifier] batch error ({type(e).__name__}: {e}); passing batch through")
@@ -311,7 +369,7 @@ def verify_posts(
                 continue
             verdicts[idx] = v
             stats["verified"] += 1
-            h = _hash(p.snippet)
+            h = _cache_key(p)
             if h:
                 new_cache_records.append({
                     "hash": h, "verdict": v, "judged_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
@@ -332,7 +390,38 @@ def verify_posts(
 
 
 # ─── Internals ────────────────────────────────────────────────────────────────
-def _call_gemini(client, model: str, posts: list[LinkedInPost]) -> list[dict | None]:
+_RETRY_IN = re.compile(r"retry in (\d+(?:\.\d+)?)s", re.IGNORECASE)
+
+
+class _DailyQuotaExhausted(RuntimeError):
+    """Gemini's per-day request quota is used up — skip the remaining batches."""
+
+
+def _call_with_retry(client, model, posts, system_prompt, attempts: int = 3):
+    """
+    Retry rate-limit (429) and overload (503) errors. The free Gemini tier
+    allows ~5 requests/minute, and a multi-source scan needs more than that,
+    so waiting out the limit beats passing the batch through unverified.
+    """
+    for attempt in range(attempts):
+        try:
+            return _call_gemini(client, model, posts, system_prompt=system_prompt)
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            if "PerDay" in msg:
+                raise _DailyQuotaExhausted(msg) from e   # waiting won't help until tomorrow
+            transient = any(code in msg for code in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE"))
+            if not transient or attempt == attempts - 1:
+                raise
+            m = _RETRY_IN.search(msg)
+            wait = min(float(m.group(1)) + 2 if m else 15 * (attempt + 1), 70)
+            print(f"  [verifier] {'rate-limited' if '429' in msg else 'model busy'} — retrying in {wait:.0f}s")
+            time.sleep(wait)
+
+
+
+def _call_gemini(client, model: str, posts: list[LinkedInPost],
+                 system_prompt: str = SYSTEM_PROMPT) -> list[dict | None]:
     """
     Call Gemini with a strict response_schema. Returns one verdict dict per
     post (None for any slot the model skipped). Raises on hard failure so the
@@ -352,7 +441,7 @@ def _call_gemini(client, model: str, posts: list[LinkedInPost]) -> list[dict | N
         config={
             "response_mime_type": "application/json",
             "response_schema": _BatchVerdicts,
-            "system_instruction": SYSTEM_PROMPT,
+            "system_instruction": system_prompt,
             "temperature": 0.0,
         },
     )
@@ -428,6 +517,9 @@ def _attach_verified(p: LinkedInPost, verdict: dict) -> None:
         # (e.g. a web-dev post that regex tagged "SEO/SEM/SMO/Brand" becomes
         # cleanly "Website Design & Development").
         p.pitch_services = [service]
+    company = (verdict.get("company") or "").strip()
+    if company and _mode(p) == "signal" and not p.company_hint:
+        p.company_hint = company
     p.ai_verdict = {
         "is_relevant": True,
         "service": service,

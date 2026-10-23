@@ -21,10 +21,10 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
 
-from agent.searcher import search_linkedin_posts, search_all_timelines
+from agent.searcher import search_linkedin_posts, search_linkedin_posts_batch, search_all_timelines
 from agent.parser import parse_result, is_within_timeline
 from agent.scorer import score_post
-from agent.filter import apply_smart_filter
+from agent.filter import apply_smart_filter, is_agency_author
 from agent.region import detect_region
 from agent.triage import load_negative_list, apply_negative_filter, load_positive_signals
 from agent import reporter
@@ -33,6 +33,8 @@ from config.keywords import (
     GRAPES_KEYWORDS, UNIVERSAL_INTENT_KEYWORDS, QUICK_SCAN_KEYWORDS,
 )
 from config.settings import TIMELINE_CONFIG, TIMELINE_BUCKETS
+from config.sources import SOURCES, enabled_sources, source_budgets, SCAN_BUDGET_USD
+from config.settings import APIFY_POST_PRICE
 
 load_dotenv()
 console = Console()
@@ -101,8 +103,15 @@ def run_pipeline(
     service_label: str = "",
     verify: bool = True,
     progress_callback = None,
+    sources: list[str] | None = None,
+    budget_usd: float | None = None,
 ) -> list:
     os.makedirs(output_dir, exist_ok=True)
+    sources = enabled_sources(sources)
+    budget_usd = SCAN_BUDGET_USD if budget_usd is None else budget_usd
+    budgets = source_budgets(sources, budget_usd)
+    # $0.001 is charged per keyword that finds nothing — reserve it up front.
+    post_items = int(max(budgets.get("linkedin_post", 0) - 0.001 * len(keywords), 0) / APIFY_POST_PRICE)
     export_formats = export_formats or []
 
     # Clean / deduplicate keywords
@@ -118,42 +127,74 @@ def run_pipeline(
 
     console.print(f"\n[blue]Scanning LinkedIn (via Apify) for [bold]{len(keywords)}[/] keywords"
                   f"{' · ' + service_label if service_label else ''}"
-                  f" · [bold]{'all timelines (1 week window)' if all_timelines else timeline}[/][/]\n")
+                  f" · [bold]{'all timelines (1 week window)' if all_timelines else timeline}[/][/]")
+    console.print(f"[blue]Sources: [bold]{', '.join(SOURCES[s]['label'] for s in sources)}[/][/]")
+    console.print(f"[blue]Apify budget: [bold]${budget_usd:.2f}[/] max · "
+                  + " · ".join(f"{SOURCES[k]['label']} ${v:.2f}" for k, v in budgets.items() if v)
+                  + (f" · LinkedIn posts ≤{post_items}" if "linkedin_post" in sources else "") + "[/]\n")
+
+    # ── Other sources (jobs, ads, freelance, X, launches, funding) ─────────────
+    # Started first and run in background threads while the LinkedIn post
+    # search runs, so extra sources add little wall-clock time.
+    from concurrent.futures import ThreadPoolExecutor
+    from agent.collectors import ScanContext, run_collectors, merge_accounts
+    other_sources = [s for s in sources if s != "linkedin_post"]
+    hours = 168 if all_timelines else TIMELINE_CONFIG.get(timeline, {}).get("max_hours", 24)
+    ctx = ScanContext(hours=hours, service=service_label, apify_token=api_key, budgets=budgets)
+    done_sources: list[str] = []
+
+    def _collector_log(msg: str):
+        console.print(f"[dim]{msg}[/]")
+        done_sources.append(msg)
+        if progress_callback:
+            try:
+                progress_callback(len(done_sources), len(other_sources), 0, "collecting",
+                                  status_note=msg.replace("[collector] ", "").strip())
+            except Exception:
+                pass
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    collectors_future = pool.submit(run_collectors, other_sources, ctx, _collector_log)
 
     # ── Fetch ──────────────────────────────────────────────────────────────────
     all_raw: list[dict] = []
 
-    if all_timelines:
+    if "linkedin_post" not in sources:
+        console.print("  [dim]→ LinkedIn post search disabled for this scan[/]")
+    elif all_timelines:
         console.print(f"  [dim]→ Running broadest scan (1 week) across all {len(keywords)} keywords…[/]")
 
-        def _progress(batch_i, batch_total, items_so_far):
+        def _progress(batch_i, batch_total, items_so_far, status_note=""):
             if progress_callback:
                 try:
-                    progress_callback(batch_i, batch_total, items_so_far, "searching")
+                    progress_callback(batch_i, batch_total, items_so_far, "searching", status_note=status_note)
                 except Exception:
                     pass
-            console.print(f"  [dim]Batch {batch_i}/{batch_total} done · {items_so_far} posts so far[/]")
+            console.print(f"  [dim]Batch {batch_i}/{batch_total} · {items_so_far} posts · {status_note}[/]")
 
         try:
-            all_raw = search_all_timelines(keywords, api_key, progress=_progress)
+            all_raw = search_all_timelines(keywords, api_key, progress=_progress,
+                                           max_items_total=post_items)
             console.print(f"  [dim]Found {len(all_raw)} raw results[/]")
         except RuntimeError as e:
             console.print(f"  [red]Error: {e}[/]")
     else:
-        total_kws = len(keywords)
-        for idx, kw in enumerate(keywords, 1):
+        console.print(f"  [dim]→ Running scan across {len(keywords)} keywords ({timeline})…[/]")
+
+        def _progress(batch_i, batch_total, items_so_far, status_note=""):
             if progress_callback:
                 try:
-                    progress_callback(idx, total_kws, len(all_raw), "searching")
+                    progress_callback(batch_i, batch_total, items_so_far, "searching", status_note=status_note)
                 except Exception:
                     pass
-            console.print(f"  [dim]→ Searching:[/] [cyan]{kw}[/]")
-            try:
-                results = search_linkedin_posts(kw, timeline, api_key)
-                console.print(f"    [dim]{len(results)} results[/]")
-                all_raw.extend(results)
-            except RuntimeError as e:
-                console.print(f"    [red]Error: {e}[/]")
+            console.print(f"  [dim]Batch {batch_i}/{batch_total} · {items_so_far} posts · {status_note}[/]")
+
+        try:
+            all_raw = search_linkedin_posts_batch(keywords, timeline, api_key, progress=_progress,
+                                                  max_items_total=post_items)
+            console.print(f"  [dim]Found {len(all_raw)} raw results[/]")
+        except RuntimeError as e:
+            console.print(f"  [red]Error: {e}[/]")
 
     # ── Deduplicate (by URL, then by content — catches cross-posted text) ──────
     seen_urls: set[str] = set()
@@ -176,23 +217,61 @@ def run_pipeline(
     # ── Parse ──────────────────────────────────────────────────────────────────
     posts = [parse_result(r) for r in unique_raw]
 
-    # ── Timeline post-filter ───────────────────────────────────────────────────
+    # ── Collect the other sources' results (they ran in parallel) ─────────────
+    if other_sources:
+        console.print(f"[dim]Waiting for {len(other_sources)} other source(s) to finish…[/]")
+    collector_results = collectors_future.result()
+    pool.shutdown(wait=False)
+    source_stats: dict[str, dict] = {
+        "linkedin_post": {"raw": len(all_raw), "candidates": len(posts),
+                          "cost_usd": round(len(all_raw) * APIFY_POST_PRICE + 0.001 * len(keywords), 3),
+                          "error": ""},
+    } if "linkedin_post" in sources else {}
+    seen_lead_urls = {p.url for p in posts}
+    for r in collector_results:
+        source_stats[r.source] = {"raw": r.raw_count, "candidates": len(r.posts),
+                                  "cost_usd": round(r.cost_usd, 3), "error": r.error}
+        for p in r.posts:
+            if p.url and p.url in seen_lead_urls:
+                continue
+            seen_lead_urls.add(p.url)
+            posts.append(p)
+
+    explicit = [p for p in posts if p.intent_mode == "explicit"]
+    signals = [p for p in posts if p.intent_mode == "signal"]
+
+    # ── Timeline post-filter (explicit asks only — signal collectors already
+    #    applied their own window; an ad's start date is not its freshness) ────
     if not all_timelines and timeline:
-        posts = [p for p in posts if is_within_timeline(p, timeline)]
+        explicit = [p for p in explicit if is_within_timeline(p, timeline)]
 
     # ── Score ──────────────────────────────────────────────────────────────────
-    posts = [score_post(p, competitors) for p in posts]
+    explicit = [score_post(p, competitors) for p in explicit]
+    for p in signals:
+        # Signal leads keep their collector score; pitch tags come from the source.
+        if not p.pitch_services:
+            p.pitch_services = list(dict.fromkeys(
+                t for s in p.moment_signals for t in s.get("service_tags", [])))
 
     # ── Smart filter (job posts, agency promos, no-intent) ────────────────────
     # Positive signals (from leads the team marked relevant) let posts from
     # known-good authors/companies bypass the rejection gates with a ⭐ boost.
     positive = load_positive_signals()
-    posts, filter_stats = apply_smart_filter(posts, positive=positive)
+    explicit, filter_stats = apply_smart_filter(explicit, positive=positive)
+
+    # Signal leads have no "looking for an agency" text, so only the
+    # agency/seller gate applies (a marketing agency hiring or running ads is
+    # a competitor, not a prospect). The AI verifier does the rest.
+    signal_agencies = [p for p in signals if p.entity_type == "brand" and is_agency_author(p)]
+    signals = [p for p in signals if not (p.entity_type == "brand" and is_agency_author(p))]
+    filter_stats["signal_agency_authors"] = len(signal_agencies)
+    posts = explicit + signals
 
     # ── Region detection (inferred from post text + author headline) ───────────
     # Detection only — never filters posts out. Powers the dashboard's region filter.
+    # Collectors that know the country (jobs, ads, freelance) set it already.
     for p in posts:
-        p.region = detect_region(p)
+        p.region = p.region or detect_region(p)
 
     console.print(
         f"[dim]After smart filter: [green]{filter_stats['passed']} qualified[/]  "
@@ -201,8 +280,12 @@ def run_pipeline(
         f"{filter_stats['job_posts']} job posts · "
         f"{filter_stats['agency_content']} agency content · "
         f"{filter_stats['thought_leadership']} thought leadership · "
-        f"{filter_stats['no_intent']} no-intent)[/]\n"
+        f"{filter_stats['no_intent']} no-intent)[/]"
     )
+    if signals or signal_agencies:
+        console.print(f"[dim]Signal leads (jobs/ads/freelance/launches/funding): "
+                      f"[green]{len(signals)}[/] kept · {len(signal_agencies)} agency/seller removed[/]")
+    console.print()
 
     if filter_stats.get("positive_included"):
         known = len(positive["author_urls"]) + len(positive["authors"]) + len(positive["companies"])
@@ -272,18 +355,36 @@ def run_pipeline(
                     f"(~{int(vstats['ms_per_post'])}ms/post · {vstats['batches']} batch(es))[/]\n"
                 )
                 
+    # ── Cross-source account merge ─────────────────────────────────────────────
+    # Same company hiring on LinkedIn AND running Meta ads → one hotter lead.
+    posts, merged = merge_accounts(posts)
+    if merged:
+        console.print(f"[dim]Account merge: folded {merged} duplicate company signal(s) "
+                      f"into multi-signal leads (+1 score)[/]\n")
+
     # ── Apollo Enrichment ──────────────────────────────────────────────────────
     from agent.apollo import ApolloClient
     apollo = ApolloClient()
     if apollo.is_enabled() and posts:
-        console.print(f"[dim]Apollo.io: Enriching contact & firmographics for {len(posts)} verified lead(s)…[/]")
-        for idx, p in enumerate(posts, 1):
+        # Highest-intent leads first; cap keeps Apollo credits bounded now that
+        # several sources feed the pipeline.
+        posts.sort(key=lambda p: p.intent_score, reverse=True)
+        apollo_cap = int(os.getenv("APOLLO_MAX_LEADS", "200"))
+        to_enrich = posts[:apollo_cap]
+        console.print(f"[dim]Apollo.io: Enriching contact & firmographics for {len(to_enrich)} "
+                      f"of {len(posts)} verified lead(s)…[/]")
+        for idx, p in enumerate(to_enrich, 1):
             company_name = p.company_hint
             if not company_name and p.entity_type == "brand":
                 company_name = p.author_name
-            
-            # Match person
-            person_data = apollo.match_person(p.author_name, p.author_url, company_name)
+            if p.intent_mode == "signal" and not (company_name or p.company_domain):
+                continue                    # anonymous marketplace client — nothing to enrich
+
+            # Match person (explicit asks only — a signal lead's "author" is a
+            # company or an anonymous client, so the decision-maker search below
+            # is what finds the person to contact)
+            person_data = (apollo.match_person(p.author_name, p.author_url, company_name)
+                           if p.intent_mode == "explicit" else None)
             if person_data:
                 p.contact_email = person_data.get("email") or ""
                 p.contact_phone = person_data.get("phone_number") or ""
@@ -300,7 +401,7 @@ def run_pipeline(
                 org_data = apollo.enrich_organization(domain=p.company_domain, name=company_name)
                 if org_data:
                     p.company_domain = org_data.get("primary_domain") or org_data.get("website") or p.company_domain
-                    p.company_size = str(org_data.get("estimated_num_employees") or "")
+                    p.company_size = str(org_data.get("estimated_num_employees") or p.company_size or "")
                     p.company_tech_stack = org_data.get("technology_names") or []
                     
                     funding_events = org_data.get("funding_events") or []
@@ -310,16 +411,8 @@ def run_pipeline(
                         round_type = latest_funding.get("funding_round_type") or ""
                         p.company_funding = f"{round_type} {amt}".strip()
             
-            # Search decision makers
-            if p.company_domain:
-                dms = apollo.search_decision_makers(p.company_domain)
-                p.decision_makers = [{
-                    "name": f"{dm.get('first_name', '')} {dm.get('last_name', '')}".strip(),
-                    "title": dm.get("title") or "",
-                    "email": dm.get("email") or "",
-                    "linkedin_url": dm.get("linkedin_url") or "",
-                    "id": dm.get("id") or ""
-                } for dm in dms]
+            # Key people (CEO/COO/CMO/Head of Marketing) are looked up on demand from the
+            # dashboard card (agent/contacts.py), so scans don't spend Apollo/Apify credits on them.
 
     # ── Sort ───────────────────────────────────────────────────────────────────
     posts.sort(key=lambda p: (p.intent_score, p.estimated_posted_at or datetime.min), reverse=True)
@@ -338,12 +431,16 @@ def run_pipeline(
         reporter.print_summary_table(posts)
 
     # ── Exports ────────────────────────────────────────────────────────────────
-    raw_results_count = len(all_raw) if 'all_raw' in locals() else 0
-    apify_cost_usd = raw_results_count * 0.0015
+    for key, st in source_stats.items():
+        st["qualified"] = sum(1 for p in posts if p.source == key)
+    raw_results_count = sum(st["raw"] for st in source_stats.values())
+    apify_cost_usd = sum(st["cost_usd"] for st in source_stats.values())
     pipeline_metadata = {
         "apify_raw_results": raw_results_count,
-        "apify_cost_usd": apify_cost_usd
+        "apify_cost_usd": apify_cost_usd,
+        "sources": source_stats,
     }
+    _print_source_table(source_stats)
 
     exported = []
     if "json" in export_formats or not export_formats:
@@ -366,6 +463,26 @@ def run_pipeline(
         console.print()
 
     return posts
+
+
+def _print_source_table(source_stats: dict):
+    """Per-source yield: raw items → candidates → qualified leads, and cost."""
+    if not source_stats:
+        return
+    table = Table(title="Leads by source", box=box.ROUNDED, border_style="blue")
+    for col in ("Source", "Raw", "Candidates", "Qualified", "Cost (USD)", "Status"):
+        table.add_column(col, justify="left" if col in ("Source", "Status") else "right")
+    for key, st in source_stats.items():
+        meta = SOURCES.get(key, {})
+        table.add_row(f"{meta.get('icon', '')} {meta.get('label', key)}", str(st["raw"]),
+                      str(st["candidates"]), f"[bold green]{st.get('qualified', 0)}[/]",
+                      f"${st['cost_usd']:.2f}", f"[red]{st['error'][:60]}[/]" if st["error"] else "ok")
+    table.add_row("[bold]Total[/]", str(sum(s["raw"] for s in source_stats.values())),
+                  str(sum(s["candidates"] for s in source_stats.values())),
+                  f"[bold green]{sum(s.get('qualified', 0) for s in source_stats.values())}[/]",
+                  f"${sum(s['cost_usd'] for s in source_stats.values()):.2f}", "")
+    console.print(table)
+    console.print()
 
 
 def _print_bucketed(posts, show_all: bool):
@@ -509,6 +626,11 @@ Examples:
                         help="Print all auto-curated keywords and exit")
     parser.add_argument("--no-verify", action="store_true",
                         help="Skip the Gemini Flash AI verifier (regex-only, no API cost)")
+    parser.add_argument("--budget", type=float, default=None,
+                        help=f"Max Apify spend for this scan in USD (default: SCAN_BUDGET_USD or ${SCAN_BUDGET_USD:.0f})")
+    parser.add_argument("--sources", nargs="+", choices=list(SOURCES),
+                        help="Lead sources to scan (default: LEAD_SOURCES in .env, else all). "
+                             "e.g. --sources linkedin_post linkedin_job meta_ads")
 
     args = parser.parse_args()
 
@@ -556,6 +678,8 @@ Examples:
         all_timelines=args.all_timelines,
         service_label=service_label,
         verify=not args.no_verify,
+        sources=args.sources,
+        budget_usd=args.budget,
     )
 
 

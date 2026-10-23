@@ -10,6 +10,7 @@ from rich.text import Text
 from rich import box
 from agent.parser import LinkedInPost
 from agent.region import REGIONS, region_flag, region_label
+from config.sources import SOURCES
 
 console = Console()
 
@@ -193,6 +194,9 @@ def export_json(posts: list[LinkedInPost], output_dir: str, filename: str = None
             "company_tech_stack": getattr(p, "company_tech_stack", []),
             "decision_makers": getattr(p, "decision_makers", []),
             "apollo_contact_id": getattr(p, "apollo_contact_id", ""),
+            "source": getattr(p, "source", "linkedin_post"),
+            "intent_mode": getattr(p, "intent_mode", "explicit"),
+            "hooks": getattr(p, "hooks", []),
         })
 
 
@@ -211,9 +215,10 @@ def export_csv(posts: list[LinkedInPost], output_dir: str, filename: str = None)
     fname = filename or f"pipeline_{ts}.csv"
     path = os.path.join(output_dir, fname)
 
-    fieldnames = ["intent_score", "entity_type", "author", "author_headline", "author_url",
+    fieldnames = ["intent_score", "source", "entity_type", "author", "author_headline", "author_url",
                   "company", "timestamp_raw", "likes", "comments", "shares",
-                  "top_signal", "pitch_services", "keywords_matched", "url", "snippet", "region"]
+                  "top_signal", "pitch_services", "keywords_matched", "url", "snippet", "region",
+                  "hooks", "company_domain", "company_size", "contact_phone"]
 
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -222,6 +227,7 @@ def export_csv(posts: list[LinkedInPost], output_dir: str, filename: str = None)
             top_sig = p.moment_signals[0]["label"] if p.moment_signals else ""
             writer.writerow({
                 "intent_score": p.intent_score,
+                "source": SOURCES.get(getattr(p, "source", ""), {}).get("label", getattr(p, "source", "")),
                 "entity_type": p.entity_type,
                 "author": p.author_name,
                 "author_headline": p.author_headline,
@@ -237,6 +243,10 @@ def export_csv(posts: list[LinkedInPost], output_dir: str, filename: str = None)
                 "url": p.url,
                 "snippet": p.snippet[:500],
                 "region": getattr(p, "region", "") or "",
+                "hooks": " | ".join(getattr(p, "hooks", [])),
+                "company_domain": getattr(p, "company_domain", "") or "",
+                "company_size": getattr(p, "company_size", "") or "",
+                "contact_phone": getattr(p, "contact_phone", "") or "",
             })
     return path
 
@@ -328,6 +338,16 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
         if p.author_url:
             author_html = f'<a href="{p.author_url}" target="_blank" style="color:inherit">{author_html}</a>'
         headline_escaped = (p.author_headline or "").replace("<", "&lt;").replace(">", "&gt;")
+        source_key = getattr(p, "source", "linkedin_post") or "linkedin_post"
+        source_meta = SOURCES.get(source_key, {"label": source_key, "icon": "🔗"})
+        source_chip = f'<span class="source-chip">{source_meta["icon"]} {source_meta["label"]}</span>'
+        hooks = getattr(p, "hooks", []) or []
+        hooks_html = (
+            '<div class="hooks-row"><span class="pitch-label">Hooks:</span> '
+            + " ".join(f'<span class="hook">{html_lib.escape(h)}</span>' for h in hooks[:5])
+            + "</div>"
+        ) if hooks else ""
+        link_label = "View LinkedIn Post →" if source_key == "linkedin_post" else f"View on {source_meta['label']} →"
         region_key = getattr(p, "region", "") or ""
         region_badge = (
             f'<span class="region-tag">{region_flag(region_key)} {region_label(region_key)}</span>'
@@ -347,6 +367,16 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
             "region": region_key,
             "pitch_services": p.pitch_services,
             "moment_signals": p.moment_signals,
+            "contact_email": getattr(p, "contact_email", "") or "",
+            "contact_phone": getattr(p, "contact_phone", "") or "",
+            "company_domain": getattr(p, "company_domain", "") or "",
+            "company_size": getattr(p, "company_size", "") or "",
+            "company_funding": getattr(p, "company_funding", "") or "",
+            "company_tech_stack": getattr(p, "company_tech_stack", []) or [],
+            "apollo_contact_id": getattr(p, "apollo_contact_id", "") or "",
+            "source": source_key,
+            "hooks": hooks,
+            "decision_makers": getattr(p, "decision_makers", []) or [],
         })
         payload_attr = html_lib.escape(payload, quote=True)
         # Triage actions row — only rendered in server mode. Posts already
@@ -370,6 +400,14 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
             <button class="triage-btn negative" onclick="triage('negative', {idx})">❌ Mark Negative</button>
           </div>"""
           
+        # Outreach drafts (email + platform response) — server mode only.
+        contacts_btn = f"""
+          <button class="draft-btn" onclick="keyContacts({idx}, this)">👥 Key Contacts</button>
+          <div class="contacts-container" id="contacts-card-{idx}" style="display:none;"></div>""" if (server_mode and getattr(p, "company_domain", "")) else ""
+        draft_row = f"""{contacts_btn}
+          <button class="draft-btn" onclick="draftFromCard({idx}, this)">✉️ Draft Outreach</button>
+          <div class="draft-container" id="draft-card-{idx}" style="display:none;"></div>""" if server_mode else ""
+
         # Apollo section variables
         email = getattr(p, "contact_email", "")
         phone = getattr(p, "contact_phone", "")
@@ -439,7 +477,7 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
             """
 
         cards_html += f"""
-        <div class="card" id="card-{idx}" data-score="{p.intent_score}" data-type="{p.entity_type}" data-services="{service_data}" data-region="{region_key}" data-payload="{payload_attr}">
+        <div class="card" id="card-{idx}" data-score="{p.intent_score}" data-type="{p.entity_type}" data-services="{service_data}" data-region="{region_key}" data-source="{source_key}" data-payload="{payload_attr}">
           <div class="card-header">
             <div class="entity-badge" style="color:{color}">{icon} {p.entity_type.upper()}</div>
             <div class="author">{author_html}{' @ ' + p.company_hint if p.company_hint and p.company_hint != p.author_name else ''}</div>
@@ -454,18 +492,27 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
           </div>
           {f'<div class="signals">{sigs}</div>' if sigs else ''}
           {f'<div class="pitch-row"><span class="pitch-label">Pitch:</span> {pitch_pills}</div>' if pitch_pills else ''}
-          <div class="region-row">{region_badge}</div>
+          {hooks_html}
+          <div class="region-row">{source_chip} {region_badge}</div>
           {apollo_contact_html}
           {apollo_company_html}
           {apollo_tech_html}
           {apollo_dms_html}
           {apollo_seq_html}
-          <a class="post-link" href="{p.url}" target="_blank">View LinkedIn Post →</a>
+          <a class="post-link" href="{p.url}" target="_blank">{link_label}</a>
           {actions_row}
+          {draft_row}
         </div>
         """
 
 
+    from collections import Counter
+    source_counts = Counter(getattr(p, "source", "linkedin_post") or "linkedin_post" for p in posts)
+    source_buttons_html = "".join(
+        f'<button class="filter-btn source-btn" onclick="filterSource(\'{k}\', this)">'
+        f'{SOURCES.get(k, {}).get("icon", "🔗")} {SOURCES.get(k, {}).get("label", k)} ({n})</button>'
+        for k, n in source_counts.most_common()
+    )
     brand_count  = sum(1 for p in posts if p.entity_type == "brand")
     person_count = sum(1 for p in posts if p.entity_type == "person")
     high_intent  = sum(1 for p in posts if p.intent_score >= 7)
@@ -595,6 +642,20 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
       display: inline-flex; align-items: center; gap: 4px;
       background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0;
       padding: 3px 11px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    }
+    .source-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: var(--accent-soft); color: var(--accent); border: 1px solid #c7d2fe;
+      padding: 3px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; margin-right: 4px;
+    }
+    .hooks-row { margin: 8px 0 2px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .hook {
+      background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa;
+      padding: 2px 9px; border-radius: 6px; font-size: 11.5px;
+    }
+    .filter-btn.source-btn.source-active {
+      background: #7c3aed; border-color: #7c3aed; color: #fff;
+      box-shadow: 0 6px 14px rgba(124,58,237,.22);
     }
     .region-tag.unmapped { background: #f8fafc; color: var(--faint); border-color: var(--line-strong); }
     .filters .region-group { display: inline-flex; gap: 9px; flex-wrap: wrap; align-items: center; }
@@ -730,12 +791,235 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
       border-bottom: none;
     }
 
+    .export-btn {
+      height: 36px;
+      padding: 0 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      font-size: 13px;
+    }
+    .export-btn:hover {
+      background: var(--accent-2);
+    }
+
     @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } .header h1 { font-size: 26px; } }
 
     """
 
     JS = """
+    function generateExcel(data, filename) {
+      if (typeof XLSX === 'undefined') {
+        alert('Excel library is loading. Please wait a few seconds and try again.');
+        return;
+      }
+      
+      const totalLeads = data.length;
+      const geoMap = {};
+      let emailsFound = 0;
+      let highHeadcountCount = 0;
+      const serviceMap = {};
+      const sizeMap = {};
+
+      data.forEach(row => {
+        const geo = row.region || 'Unmapped';
+        if (!geoMap[geo]) {
+          geoMap[geo] = { count: 0, totalScore: 0 };
+        }
+        geoMap[geo].count++;
+        geoMap[geo].totalScore += parseFloat(row.intent_score || 0);
+
+        if (row.contact_email && row.contact_email.trim() !== '') {
+          emailsFound++;
+        }
+
+        const size = row.company_size || 'Unknown';
+        sizeMap[size] = (sizeMap[size] || 0) + 1;
+
+        if (size !== 'Unknown' && size !== '') {
+          const match = size.match(/(\\d+)/g);
+          if (match) {
+            const maxVal = Math.max(...match.map(Number));
+            if (maxVal > 200) {
+              highHeadcountCount++;
+            }
+          } else if (size.includes('+') || size.toLowerCase().includes('large') || size.toLowerCase().includes('enterprise')) {
+            highHeadcountCount++;
+          }
+        }
+
+        const services = row.pitch_services || [];
+        if (Array.isArray(services)) {
+          services.forEach(svc => {
+            if (svc) serviceMap[svc] = (serviceMap[svc] || 0) + 1;
+          });
+        } else if (typeof services === 'string' && services.trim() !== '') {
+          services.split(/[|,;]/).forEach(svc => {
+            const cleanSvc = svc.trim();
+            if (cleanSvc) serviceMap[cleanSvc] = (serviceMap[cleanSvc] || 0) + 1;
+          });
+        }
+      });
+
+      const summaryRows = [];
+      
+      // Row 1
+      summaryRows[0] = ['DAILY LEAD SUMMARY', '', '', 'SERVICE CATEGORY BREAKDOWN', ''];
+      // Row 2
+      summaryRows[1] = ['Generated At', new Date().toLocaleString(), '', 'Service Category', 'Lead Count'];
+      // Row 3
+      summaryRows[2] = ['METRIC', 'VALUE', '', '', ''];
+      // Row 4
+      summaryRows[3] = ['Total Leads', totalLeads, '', '', ''];
+      // Row 5
+      summaryRows[4] = ['Apollo Emails Found', `${emailsFound} of ${totalLeads} (${totalLeads ? (emailsFound/totalLeads*100).toFixed(1) : 0}%)`, '', '', ''];
+      // Row 6
+      summaryRows[5] = ['High Headcount Companies (>200 employees)', highHeadcountCount, '', '', ''];
+
+      const serviceKeys = Object.keys(serviceMap);
+      for (let i = 0; i < Math.max(4, serviceKeys.length); i++) {
+        const rowIdx = 2 + i;
+        if (!summaryRows[rowIdx]) {
+          summaryRows[rowIdx] = ['', '', '', '', ''];
+        }
+        const svc = serviceKeys[i] || '';
+        const count = svc ? serviceMap[svc] : '';
+        summaryRows[rowIdx][3] = svc;
+        summaryRows[rowIdx][4] = count;
+      }
+
+      let startIdx = Math.max(7, summaryRows.length);
+      summaryRows[startIdx] = [];
+      summaryRows[startIdx + 1] = ['COMPANY SIZE BREAKDOWN-Employee Headcount', '', '', 'GEO-WISE INTENT BREAKDOWN', '', ''];
+      summaryRows[startIdx + 2] = ['Size Range', 'Employee Count', '', 'Region', 'Lead Count', 'Average Intent Score'];
+
+      const sizeKeys = Object.keys(sizeMap);
+      const geoKeys = Object.keys(geoMap);
+      const maxRows = Math.max(sizeKeys.length, geoKeys.length);
+
+      for (let i = 0; i < maxRows; i++) {
+        const rowIdx = startIdx + 3 + i;
+        summaryRows[rowIdx] = ['', '', '', '', '', ''];
+
+        if (i < sizeKeys.length) {
+          const size = sizeKeys[i];
+          summaryRows[rowIdx][0] = size;
+          summaryRows[rowIdx][1] = sizeMap[size];
+        }
+
+        if (i < geoKeys.length) {
+          const geo = geoKeys[i];
+          const geoData = geoMap[geo];
+          const avgScore = (geoData.totalScore / geoData.count).toFixed(2);
+          summaryRows[rowIdx][3] = geo.toUpperCase();
+          summaryRows[rowIdx][4] = geoData.count;
+          summaryRows[rowIdx][5] = parseFloat(avgScore);
+        }
+      }
+
+      const wb = XLSX.utils.book_new();
+      const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+
+      // Set Merges
+      wsSummary['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } },
+        { s: { r: 0, c: 3 }, e: { r: 0, c: 4 } },
+        { s: { r: startIdx + 1, c: 0 }, e: { r: startIdx + 1, c: 1 } },
+        { s: { r: startIdx + 1, c: 3 }, e: { r: startIdx + 1, c: 5 } }
+      ];
+
+      // Set Column Widths
+      wsSummary['!cols'] = [
+        { wch: 42 }, // Column A
+        { wch: 22 }, // Column B
+        { wch: 4 },  // Column C
+        { wch: 32 }, // Column D
+        { wch: 15 }, // Column E
+        { wch: 22 }  // Column F
+      ];
+
+      XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+      const formattedData = data.map(row => {
+        return {
+          'Intent Score': row.intent_score || 0,
+          'Source': row.source || 'linkedin_post',
+          'Author': row.author || '',
+          'Author Headline': row.author_headline || '',
+          'Author URL': row.author_url || '',
+          'Company': row.company || '',
+          'URL': row.url || '',
+          'Snippet': row.snippet || '',
+          'Region': row.region || '',
+          'Pitch Services': Array.isArray(row.pitch_services) ? row.pitch_services.join(' | ') : (row.pitch_services || ''),
+          'Email': row.contact_email || '',
+          'Phone': row.contact_phone || '',
+          'Company Domain': row.company_domain || '',
+          'Company Size': row.company_size || '',
+          'Funding': row.company_funding || '',
+          'Tech Stack': Array.isArray(row.company_tech_stack) ? row.company_tech_stack.join(', ') : (row.company_tech_stack || ''),
+          'Apollo Contact ID': row.apollo_contact_id || '',
+          'Hooks': Array.isArray(row.hooks) ? row.hooks.join(' | ') : (row.hooks || ''),
+          'Marked At / Date': row.marked_at || ''
+        };
+      });
+      const wsLeads = XLSX.utils.json_to_sheet(formattedData);
+      XLSX.utils.book_append_sheet(wb, wsLeads, 'Leads Data');
+
+      XLSX.writeFile(wb, filename);
+    }
+
+    function getScanRunTimestamp() {
+      const metaDiv = document.querySelector('.header .meta');
+      if (metaDiv) {
+        const spans = metaDiv.querySelectorAll('span');
+        for (let span of spans) {
+          if (span.textContent.includes('Generated:')) {
+            const match = span.textContent.match(/Generated:\\s*([\\d-]+)\\s*([\\d:]+)/);
+            if (match) {
+              const day = match[1]; // YYYY-MM-DD
+              const time = match[2].replace(/:/g, '-'); // HH-MM
+              return { day, time };
+            }
+          }
+        }
+      }
+      const now = new Date();
+      const day = now.toISOString().split('T')[0];
+      const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
+      return { day, time };
+    }
+
+    function downloadLeadsExcel() {
+      const cards = document.querySelectorAll('#panel-leads .card');
+      if (!cards.length) {
+        alert('No leads to export.');
+        return;
+      }
+      const data = [];
+      cards.forEach(card => {
+        if (card.classList.contains('hidden')) return;
+        try {
+          const payloadStr = card.getAttribute('data-payload');
+          if (payloadStr) {
+            data.push(JSON.parse(payloadStr));
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      });
+      const { day, time } = getScanRunTimestamp();
+      generateExcel(data, `LinkedInSalesAgent-${day}-${time}.xlsx`);
+    }
+
     function revealContact(elem, email) {
       elem.innerText = "📧 " + email;
       elem.style.color = "var(--ink-soft)";
@@ -817,6 +1101,7 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
     let activeCategory = 'all';
 
     let activeRegion = 'all';
+    let activeSource = 'all';
 
     const entityFilters = ['ent-brand','ent-person','ent-article'];
     const serviceFilters = ['seo','sem','smo','pr','brand','creative','media','film'];
@@ -840,15 +1125,23 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
 
     function applyFilters() {
       document.querySelectorAll('.card').forEach(card => {
-        const show = matchesCategory(card, activeCategory) && matchesRegion(card, activeRegion);
+        const show = matchesCategory(card, activeCategory) && matchesRegion(card, activeRegion)
+          && (activeSource === 'all' || (card.dataset.source || 'linkedin_post') === activeSource);
         card.classList.toggle('hidden', !show);
       });
     }
 
     function filterCards(type, btn) {
       activeCategory = type;
-      document.querySelectorAll('.filters .filter-btn:not(.region-btn)').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.filters .filter-btn:not(.region-btn):not(.source-btn)').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      applyFilters();
+    }
+
+    function filterSource(type, btn) {
+      activeSource = type;
+      document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('source-active'));
+      btn.classList.add('source-active');
       applyFilters();
     }
 
@@ -990,6 +1283,7 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LinkedIn Sales Pipeline — {', '.join(keywords)}</title>
 <style>{CSS}</style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -1037,6 +1331,12 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
       <button class="filter-btn region-btn" onclick="filterRegion('europe', this)">🇪🇺 Europe</button>
       <button class="filter-btn region-btn" onclick="filterRegion('unmapped', this)">❓ Unmapped</button>
     </span>
+    {f'''<span class="sep"></span>
+    <span class="region-group">
+      <span class="region-label">Source</span>
+      <button class="filter-btn source-btn source-active" onclick="filterSource('all', this)">All sources</button>
+      {source_buttons_html}
+    </span>''' if len(source_counts) > 1 else ''}
   </div>
 
   {f'''<div class="tabs">
@@ -1046,6 +1346,12 @@ def render_html_string(posts: list[LinkedInPost], keywords: list[str],
   </div>''' if server_mode else ''}
 
   <div class="tab-panel tab-active" id="panel-leads">
+    <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid var(--line); padding: 15px 20px; border-radius: var(--radius); box-shadow: var(--shadow-sm);">
+      <h4 style="font-size: 16px; font-weight: 700; color: var(--ink); margin: 0;">Today's Leads</h4>
+      <button onclick="downloadLeadsExcel()" class="export-btn">
+        <span>📥 Export Today's Leads Excel</span>
+      </button>
+    </div>
     <div class="grid" id="grid">
 {cards_html}
     </div>

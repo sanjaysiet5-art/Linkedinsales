@@ -40,7 +40,7 @@ scan_status = {
 
 
 # ─── Background Scan Thread ──────────────────────────────────────────────────
-def bg_scan(mode, service, timeline, min_score, manual_keywords):
+def bg_scan(mode, service, timeline, min_score, manual_keywords, sources=None):
     global scan_status
     try:
         scan_status["status"] = "running"
@@ -74,11 +74,15 @@ def bg_scan(mode, service, timeline, min_score, manual_keywords):
 
         scan_status["message"] = f"Searching LinkedIn for {len(keywords)} keywords (Timeline: {timeline})... (5%)"
 
-        def progress_callback(current, total, items_so_far, phase):
+        def progress_callback(current, total, items_so_far, phase, status_note=""):
             global scan_status
             if phase == "searching":
                 pct = 5 + int((current / total) * 70)  # search phase represents 5% to 75%
-                scan_status["message"] = f"Searching LinkedIn (Batch {current}/{total}): {items_so_far} posts found so far... ({pct}%)"
+                note_str = f" · {status_note}" if status_note else ""
+                count_str = f": {items_so_far} posts collected" if items_so_far > 0 else ""
+                scan_status["message"] = f"Searching LinkedIn (Batch {current}/{total}){count_str}{note_str}... ({pct}%)"
+            elif phase == "collecting":
+                scan_status["message"] = f"Other sources ({current}/{total} done) · {status_note}"
             elif phase == "verifying":
                 pct = 75 + int((current / total) * 20)  # verifying phase represents 75% to 95%
                 scan_status["message"] = f"AI Verifier running (Batch {current}/{total})... ({pct}%)"
@@ -95,7 +99,8 @@ def bg_scan(mode, service, timeline, min_score, manual_keywords):
             all_timelines=(timeline == "all"),
             service_label=service_label,
             verify=True,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            sources=sources or None,
         )
 
         scan_status["status"] = "idle"
@@ -153,6 +158,9 @@ def _load_posts_from_json(path: str) -> tuple[list[LinkedInPost], list[str], str
         p.company_tech_stack = d.get("company_tech_stack", [])
         p.decision_makers = d.get("decision_makers", [])
         p.apollo_contact_id = d.get("apollo_contact_id", "")
+        p.source = d.get("source") or "linkedin_post"
+        p.intent_mode = d.get("intent_mode") or "explicit"
+        p.hooks = d.get("hooks") or []
         posts.append(p)
 
 
@@ -395,6 +403,10 @@ def index() -> Response:
       
       <button class="scan-submit-btn" id="start-scan-btn" onclick="triggerScan()">Start Scan</button>
     </div>
+    <div class="scan-sources">
+      <span class="scan-sources-label">Sources</span>
+      __SOURCE_CHECKBOXES__
+    </div>
   </div>
 
   <div class="overlay" id="loading-overlay">
@@ -406,7 +418,22 @@ def index() -> Response:
   </div>
     """
 
+    from config.sources import SOURCES, enabled_sources
+    _on = set(enabled_sources())
+    control_panel_html = control_panel_html.replace("__SOURCE_CHECKBOXES__", "".join(
+        f'<label class="src-opt"><input type="checkbox" class="scan-src" value="{k}"'
+        f'{" checked" if k in _on else ""}> {v["icon"]} {v["label"]}</label>'
+        for k, v in SOURCES.items()
+    ))
+
     control_panel_css = """
+    .scan-sources { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+      margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .scan-sources-label { font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--muted); margin-right: 4px; }
+    .src-opt { display: inline-flex; gap: 6px; align-items: center; font-size: 13px;
+      color: var(--ink-soft); cursor: pointer; text-transform: none; font-weight: 500; margin: 0; }
+    .src-opt input { width: auto; margin: 0; }
     /* Scan Card Styling */
     .scan-card {
       background: #fff;
@@ -602,6 +629,28 @@ def index() -> Response:
       gap: 4px;
       transition: all 0.2s;
     }
+    .kc-row { display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--line, #eee); font-size:12.5px; }
+    .kc-row > div:last-child { text-align:right; }
+    .kc-role { font-size:10.5px; font-weight:600; padding:1px 6px; border-radius:8px; background:var(--accent); color:#fff; }
+    .kc-dim { color:#888; font-size:11.5px; }
+    .kc-pick { cursor:pointer; }
+    .contacts-container { margin-top:8px; }
+    .draft-btn {
+      width: 100%; margin-top: 10px; padding: 9px 12px; border-radius: 9px; cursor: pointer;
+      font-size: 12.5px; font-weight: 600; background: var(--accent-soft, #eef2ff);
+      color: var(--accent); border: 1px solid #c7d2fe; transition: all .15s ease;
+    }
+    .draft-btn:hover { background: var(--accent); color: #fff; }
+    .draft-btn:disabled { opacity: .6; cursor: wait; }
+    .draft-subject {
+      width: 100%; border-radius: 8px; border: 1px solid var(--line-strong); padding: 8px 12px;
+      font-size: 12.5px; font-weight: 600; font-family: inherit; margin-bottom: 5px; box-sizing: border-box;
+    }
+    .draft-note {
+      font-size: 12px; background: #fffbeb; color: #92400e; border: 1px solid #fde68a;
+      padding: 6px 10px; border-radius: 8px; margin-bottom: 10px;
+    }
+    a.copy-btn { text-decoration: none; }
     .copy-btn:hover {
       background: var(--canvas);
       border-color: var(--muted);
@@ -621,6 +670,8 @@ def index() -> Response:
       const timeline = document.getElementById('scan-timeline').value;
       const min_score = document.getElementById('scan-score').value;
       const manual_keywords = document.getElementById('scan-manual').value;
+      const sources = Array.from(document.querySelectorAll('.scan-src:checked')).map(el => el.value);
+      if (!sources.length) { alert('Pick at least one source'); return; }
       
       const btn = document.getElementById('start-scan-btn');
       btn.disabled = true;
@@ -629,7 +680,7 @@ def index() -> Response:
       fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, service, timeline, min_score, manual_keywords })
+        body: JSON.stringify({ mode, service, timeline, min_score, manual_keywords, sources })
       })
       .then(res => res.json())
       .then(data => {
@@ -657,7 +708,7 @@ def index() -> Response:
       overlay.style.display = 'flex';
       
       const timer = setInterval(() => {
-        fetch('/api/scan/status')
+        fetch(`/api/scan/status?t=${Date.now()}`)
         .then(res => res.json())
         .then(status => {
           badge.innerText = status.status.toUpperCase();
@@ -688,7 +739,7 @@ def index() -> Response:
 
     // Initial status check in case a scan is already running on page load
     document.addEventListener('DOMContentLoaded', () => {
-      fetch('/api/scan/status')
+      fetch(`/api/scan/status?t=${Date.now()}`)
       .then(res => res.json())
       .then(status => {
         if (status.status === 'running') {
@@ -702,6 +753,7 @@ def index() -> Response:
       try {
         const resp = await fetch(API_BASE + '/api/prospects');
         const items = await resp.json();
+        _prospects = items;
         if (!items.length) {
           panel.innerHTML = emptyState('No leads marked relevant yet. Click ✅ Mark Relevant on any lead.');
           return;
@@ -753,11 +805,10 @@ def index() -> Response:
       });
     }
 
-    function prospectCard(p) {
+    function prospectCard(p, i) {
       const snip = (p.snippet || '').slice(0, 280) + ((p.snippet || '').length > 280 ? '…' : '');
       const regionTag = p.region ? regionBadge(p.region) : '<span class="region-tag unmapped">❓ Unmapped</span>';
-      const containerId = 'draft-' + p.url.replace(/[^a-zA-Z0-9]/g, '');
-      
+
       return '<div class="card">'
         + '<div class="card-header"><div class="entity-badge">' + esc(p.entity_type || 'lead').toUpperCase() + '</div>'
         + '<div class="author">' + esc(p.author || 'Unknown') + '</div>'
@@ -765,70 +816,210 @@ def index() -> Response:
         + '<div class="snippet">' + esc(snip) + '</div>'
         + '<div class="region-row">' + regionTag + '</div>'
         + '<div class="prospect-meta"><span>📅 Marked ' + esc(p.marked_at || '') + '</span>'
-        + '<a class="post-link" href="' + esc(p.url || '#') + '" target="_blank">Open on LinkedIn →</a></div>'
-        + '<button onclick="draftOutreach(`' + p.url + '`, this)" class="scan-submit-btn" style="height:32px; font-size:12px; padding:0 12px; margin-top:10px; width:100%; justify-content:center; display:flex; align-items:center;">Outreach Drafts ✉️</button>'
-        + '<div class="draft-container" id="' + containerId + '" style="display:none;"></div>'
+        + '<a class="post-link" href="' + esc(p.url || '#') + '" target="_blank">Open source →</a></div>'
+        + '<button class="draft-btn" onclick="draftFromProspect(' + i + ', this)">✉️ Draft Outreach</button>'
+        + '<div class="draft-container" id="draft-prospect-' + i + '" style="display:none;"></div>'
         + '</div>';
     }
 
-    async function draftOutreach(url, btn) {
-      const containerId = 'draft-' + url.replace(/[^a-zA-Z0-9]/g, '');
-      let container = document.getElementById(containerId);
-      
-      if (container.style.display === 'block') {
-        container.style.display = 'none';
-        btn.innerText = 'Outreach Drafts ✉️';
+
+    // ─── Key contacts (agent/contacts.py via /api/contacts) ──────────────────
+    const _contactState = {};
+
+    async function keyContacts(idx, btn, refresh) {
+      const box = document.getElementById('contacts-card-' + idx);
+      if (!refresh && box.innerHTML !== '') {
+        const open = box.style.display === 'block';
+        box.style.display = open ? 'none' : 'block';
         return;
       }
-      
-      if (container.innerHTML !== '') {
-        container.style.display = 'block';
-        btn.innerText = 'Hide Drafts ✕';
-        return;
-      }
-      
+      const lead = JSON.parse(document.getElementById('card-' + idx).dataset.payload || '{}');
       btn.disabled = true;
-      btn.innerText = 'Drafting...';
-      
+      const label = btn.innerText;
+      btn.innerText = 'Finding key people…';
       try {
-        const resp = await fetch('/api/drafts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
+        const resp = await fetch(API_BASE + '/api/contacts', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign({}, lead, { refresh: !!refresh }))
         });
         const res = await resp.json();
-        
         if (!res.ok) throw new Error(res.error);
-        
-        const drafts = res.drafts;
-        container.innerHTML = `
-          <div class="draft-section" style="margin-top:10px;">
-            <label>Email Pitch</label>
-            <textarea id="email-subject-${containerId}" style="min-height:35px; font-weight:bold; margin-bottom:5px;" readonly>Subject: ${drafts.email_subject}</textarea>
-            <textarea id="email-body-${containerId}" style="min-height:120px;" readonly>${drafts.email_body}</textarea>
-            <button class="copy-btn" onclick="copyText('email-body-${containerId}')">📋 Copy Email</button>
-          </div>
-          <div class="draft-section" style="margin-top:10px;">
-            <label>LinkedIn Comment Response</label>
-            <textarea id="comment-${containerId}" style="min-height:80px;" readonly>${drafts.linkedin_comment}</textarea>
-            <button class="copy-btn" onclick="copyText('comment-${containerId}')">📋 Copy Comment</button>
-          </div>
-        `;
-        container.style.display = 'block';
-        btn.disabled = false;
-        btn.innerText = 'Hide Drafts ✕';
+        _contactState[idx] = { lead: lead, domain: res.domain, contacts: res.contacts, sources: res.sources };
+        renderContacts(idx);
+        box.style.display = 'block';
       } catch (e) {
-        alert('Draft generation failed: ' + e.message);
-        btn.disabled = false;
-        btn.innerText = 'Outreach Drafts ✉️';
+        alert('Key contacts failed: ' + e.message);
+      }
+      btn.innerText = label;
+      btn.disabled = false;
+    }
+
+    function renderContacts(idx) {
+      const st = _contactState[idx];
+      const box = document.getElementById('contacts-card-' + idx);
+      if (!st.contacts.length) {
+        box.innerHTML = '<div class="draft-note">No CEO / COO / CMO / Head of Marketing found at '
+          + esc(st.domain) + ' (' + esc(st.sources.join(', ')) + ').</div>';
+        return;
+      }
+      const rows = st.contacts.map((c, n) => {
+        const name = esc(c.first_name + ' ' + (c.last_name || ''));
+        const li = c.linkedin_url ? ' <a href="' + esc(c.linkedin_url) + '" target="_blank">in</a>' : '';
+        let contact;
+        if (c.revealed_at) {
+          const email = c.email
+            ? '<label class="kc-pick"><input type="radio" name="kc-' + idx + '" onchange="pickContact(' + idx + ',' + n + ')"> 📧 '
+              + esc(c.email) + (c.email_status ? ' <span class="kc-dim">(' + esc(c.email_status) + ')</span>' : '') + '</label>'
+            : '<span class="kc-dim">No email in Apollo</span>';
+          const phoneMsg = { pending: 'mobile pending from Apollo…', not_found: 'no mobile in Apollo',
+                             needs_public_url: 'mobile needs PUBLIC_BASE_URL (deployed server)' };
+          const phone = c.mobile ? '📞 <a href="tel:' + esc(c.mobile) + '">' + esc(c.mobile) + '</a>'
+                                 : '<span class="kc-dim">📞 ' + (phoneMsg[c.phone_status] || 'no mobile') + '</span>';
+          contact = email + '<br>' + phone;
+        } else {
+          contact = '<button class="copy-btn" onclick="revealKc(' + idx + ',' + n + ', this)">Reveal email &amp; mobile (1 credit)</button>';
+        }
+        return '<div class="kc-row"><div><span class="kc-role">' + esc(c.role) + '</span> <b>' + name + '</b>' + li
+          + '<div class="kc-dim">' + esc(c.title || '') + ' · via ' + esc(c.source) + '</div></div>'
+          + '<div>' + contact + '</div></div>';
+      }).join('');
+      box.innerHTML = rows
+        + '<div class="kc-dim" style="margin-top:6px;">Pick an email to auto-draft the outreach. Sources: '
+        + esc(st.sources.join(', ')) + ' · <a href="#" onclick="keyContacts(' + idx + ', this, true); return false;">refresh</a></div>'
+        + '<div class="draft-container" id="draft-kc-' + idx + '" style="display:none;"></div>';
+      if (st.contacts.some(c => c.phone_status === 'pending')) {
+        clearTimeout(st.poll);
+        st.poll = setTimeout(() => refreshPhones(idx), 15000);
       }
     }
 
-    function copyText(id) {
+    async function revealKc(idx, n, btn) {
+      const st = _contactState[idx];
+      btn.disabled = true;
+      btn.innerText = 'Revealing…';
+      try {
+        const resp = await fetch(API_BASE + '/api/contacts/reveal', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: st.domain, key: st.contacts[n].key })
+        });
+        const res = await resp.json();
+        if (!res.ok) throw new Error(res.error);
+        st.contacts[n] = res.contact;
+        renderContacts(idx);
+      } catch (e) {
+        alert('Reveal failed: ' + e.message);
+        btn.disabled = false;
+        btn.innerText = 'Reveal email & mobile (1 credit)';
+      }
+    }
+
+    async function refreshPhones(idx) {
+      const st = _contactState[idx];
+      const resp = await fetch(API_BASE + '/api/contacts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(st.lead)
+      });
+      const res = await resp.json();
+      if (!res.ok) return;
+      const picked = document.querySelector('input[name="kc-' + idx + '"]:checked');
+      st.contacts = res.contacts;
+      if (!picked) renderContacts(idx);   // don't wipe an open draft
+    }
+
+    function pickContact(idx, n) {
+      const st = _contactState[idx];
+      const c = st.contacts[n];
+      const lead = Object.assign({}, st.lead, {
+        recipient: { name: c.first_name + ' ' + (c.last_name || ''), title: c.title, role: c.role, email: c.email }
+      });
+      const box = document.getElementById('draft-kc-' + idx);
+      box.innerHTML = '';
+      const btn = { disabled: false, innerText: '' };   // drafts render inline; no toggle button here
+      draftOutreach(lead, 'draft-kc-' + idx, btn, true);
+    }
+
+    // ─── Outreach drafts (agent/outreach.py via /api/drafts) ─────────────────
+    let _prospects = [];
+
+    function draftFromCard(idx, btn) {
+      const card = document.getElementById('card-' + idx);
+      draftOutreach(JSON.parse(card.dataset.payload || '{}'), 'draft-card-' + idx, btn);
+    }
+
+    function draftFromProspect(i, btn) {
+      draftOutreach(_prospects[i], 'draft-prospect-' + i, btn);
+    }
+
+    async function draftOutreach(lead, containerId, btn, force) {
+      const container = document.getElementById(containerId);
+      const idle = '✉️ Draft Outreach';
+      if (!force && container.innerHTML !== '') {
+        const open = container.style.display === 'block';
+        container.style.display = open ? 'none' : 'block';
+        btn.innerText = open ? idle : 'Hide Drafts ✕';
+        return;
+      }
+      btn.disabled = true;
+      btn.innerText = 'Drafting… (~10s)';
+      try {
+        const resp = await fetch(API_BASE + '/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lead)
+        });
+        const res = await resp.json();
+        if (!res.ok) throw new Error(res.error);
+        container.innerHTML = renderDrafts(res.drafts, containerId, lead);
+        container._regen = () => draftOutreach(lead, containerId, btn, true);
+        container.style.display = 'block';
+        btn.innerText = 'Hide Drafts ✕';
+      } catch (e) {
+        alert('Draft generation failed: ' + e.message);
+        btn.innerText = idle;
+      }
+      btn.disabled = false;
+    }
+
+    function renderDrafts(d, cid, lead) {
+      const toLine = d.to ? '<div class="draft-note">To: <b>' + esc(d.to) + '</b></div>' : '';
+      const note = d.recipient ? toLine :
+        '<div class="draft-note">No contact name on this lead: replace <b>[First name]</b> before sending.</div>';
+      const emails = d.emails.map((e, n) => {
+        const id = cid + '-e' + n;
+        const title = d.emails.length > 1 ? 'Email ' + (n + 1) + ' · ' + esc(e.angle) : 'Email · ' + esc(e.angle);
+        const to = d.to || lead.contact_email;
+        const mail = to
+          ? '<a class="copy-btn" href="mailto:' + encodeURIComponent(to)
+            + '?subject=' + encodeURIComponent(e.subject) + '&body=' + encodeURIComponent(e.body) + '">📨 Open in mail</a>'
+          : '';
+        return '<div class="draft-section"><label>' + title + '</label>'
+          + '<input id="' + id + '-s" class="draft-subject" value="' + esc(e.subject) + '">'
+          + '<textarea id="' + id + '-b" style="min-height:260px;">' + esc(e.body) + '</textarea>'
+          + '<button class="copy-btn" onclick="copyText(\\'' + id + '-s\\', this)">📋 Subject</button> '
+          + '<button class="copy-btn" onclick="copyText(\\'' + id + '-b\\', this)">📋 Email body</button> ' + mail
+          + '</div>';
+      }).join('');
+      const rid = cid + '-r';
+      return note + emails
+        + '<div class="draft-section"><label>' + esc(d.response.label) + '</label>'
+        + '<textarea id="' + rid + '" style="min-height:100px;">' + esc(d.response.text) + '</textarea>'
+        + '<button class="copy-btn" onclick="copyText(\\'' + rid + '\\', this)">📋 Copy ' + esc(d.response.label) + '</button>'
+        + '</div>'
+        + '<button class="copy-btn" onclick="document.getElementById(\\'' + cid + '\\')._regen()">↻ Regenerate</button>';
+    }
+
+    async function copyText(id, btn) {
       const el = document.getElementById(id);
-      el.select();
-      document.execCommand('copy');
-      alert('Copied to clipboard!');
+      try {
+        await navigator.clipboard.writeText(el.value);
+      } catch (e) {
+        el.select();
+        document.execCommand('copy');
+      }
+      if (btn) {
+        const label = btn.innerText;
+        btn.innerText = '✓ Copied';
+        setTimeout(() => { btn.innerText = label; }, 1200);
+      }
     }
     """
 
@@ -841,8 +1032,8 @@ def index() -> Response:
     html = html.replace(html_target, f"{control_panel_html}\n{html_target}", 1)
 
     # Inject JS
-    js_target = "</script>"
-    html = html.replace(js_target, f"{control_panel_js}\n{js_target}", 1)
+    body_target = "</body>"
+    html = html.replace(body_target, f"<script>{control_panel_js}</script>\n{body_target}", 1)
 
     return Response(html, mimetype="text/html")
 
@@ -859,10 +1050,13 @@ def api_scan():
     timeline = payload.get("timeline", "1day")
     min_score = int(payload.get("min_score", 5))
     manual_keywords = payload.get("manual_keywords", "")
+    sources = payload.get("sources") or None
+    if sources is not None and not isinstance(sources, list):
+        return jsonify({"ok": False, "error": "sources must be a list"}), 400
 
     t = threading.Thread(
         target=bg_scan,
-        args=(mode, service, timeline, min_score, manual_keywords)
+        args=(mode, service, timeline, min_score, manual_keywords, sources)
     )
     t.daemon = True
     t.start()
@@ -912,82 +1106,73 @@ def api_positive():
     })
 
 
-SYSTEM_DRAFT_PROMPT = """You are a senior B2B sales outreach strategist for a premium digital agency called Grapesworldwide.
-
-Your job: Write a hyper-personalized cold outreach email AND a personalized LinkedIn comment response.
-
-Rubric for outreach email:
-- Subject line must be short, relevant, and engaging.
-- Address the author directly by name.
-- Explicitly reference their post content (e.g. "I saw your post looking for an SEO agency for...").
-- Pitch Grapesworldwide's relevant capabilities (e.g. SEO, SMO, Website Dev, Branding, Creative, AI, Media) matching their request.
-- Keep the overall length under 150 words. Be professional and avoid boilerplate/filler.
-- End with a clean, low-friction Call-To-Action (CTA) inviting a brief chat or case-study exchange.
-
-Rubric for LinkedIn comment response:
-- Short, engaging, and professional (under 60 words).
-- Address their request directly, highlight fit, and invite them to connect or check their inbox.
-"""
-
 @app.route("/api/drafts", methods=["POST"])
 def api_drafts():
+    """Outreach email(s) + platform response for one lead.
+
+    Body is either the card's full payload (any lead card) or {"url": ...}
+    for a saved prospect.
+    """
     payload = request.get_json(silent=True) or {}
-    url = payload.get("url")
-    if not url:
-        return jsonify({"ok": False, "error": "URL is required"}), 400
+    lead = payload if payload.get("snippet") else None
+    if lead is None:
+        url = payload.get("url")
+        if not url:
+            return jsonify({"ok": False, "error": "Lead payload or URL is required"}), 400
+        lead = next((p for p in load_sales_prospects() if p.get("url") == url), None)
+        if not lead:
+            return jsonify({"ok": False, "error": "Prospect not found"}), 404
 
-    # Find the prospect
-    prospects = load_sales_prospects()
-    prospect = None
-    for p in prospects:
-        if p.get("url") == url:
-            prospect = p
-            break
-            
-    if not prospect:
-        return jsonify({"ok": False, "error": "Prospect not found"}), 404
-
-    # Call Gemini to generate drafts
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         return jsonify({"ok": False, "error": "GOOGLE_API_KEY is not set in .env"}), 500
 
+    from agent.outreach import draft_outreach
     try:
-        from google import genai
-        from pydantic import BaseModel
-        
-        class OutreachDrafts(BaseModel):
-            email_subject: str
-            email_body: str
-            linkedin_comment: str
-
-        client = genai.Client(api_key=api_key)
-        
-        user_prompt = f"""
-Author: {prospect.get('author', 'Unknown')}
-Headline: {prospect.get('author_headline', '')}
-Company: {prospect.get('company', '')}
-Service of Interest: {', '.join(prospect.get('pitch_services', []))}
-LinkedIn Post Content:
-{prospect.get('snippet', '')}
-"""
-        
-        resp = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=user_prompt,
-            config={
-                "response_mime_type": "application/json",
-                "response_schema": OutreachDrafts,
-                "system_instruction": SYSTEM_DRAFT_PROMPT,
-                "temperature": 0.2,
-            },
-        )
-        data = json.loads(resp.text)
-        return jsonify({"ok": True, "drafts": data})
-    except Exception as e:
+        return jsonify({"ok": True, "drafts": draft_outreach(lead, api_key)})
+    except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/contacts", methods=["POST"])
+def api_contacts():
+    """Key contacts (CEO, COO, CMO, Head of Marketing) for a lead's company: Apollo search, Apify fallback."""
+    payload = request.get_json(silent=True) or {}
+    from agent.contacts import find_key_contacts
+    try:
+        return jsonify({"ok": True, **find_key_contacts(payload, refresh=bool(payload.get("refresh")))})
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/contacts/reveal", methods=["POST"])
+def api_contacts_reveal():
+    """Unmask one contact via Apollo (1 credit): email now, mobile later via webhook."""
+    payload = request.get_json(silent=True) or {}
+    from agent.contacts import reveal_contact
+    try:
+        return jsonify({"ok": True, "contact": reveal_contact(payload.get("domain", ""), payload.get("key", ""))})
+    except (KeyError, LookupError) as e:
+        return jsonify({"ok": False, "error": str(e).strip("'")}), 404
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/apollo/phone-webhook", methods=["POST"])
+def api_apollo_phone_webhook():
+    """Apollo delivers revealed mobile numbers here (async); token guards it."""
+    from agent.contacts import record_phone_webhook
+    try:
+        n = record_phone_webhook(request.get_json(silent=True) or {}, request.args.get("token", ""))
+    except PermissionError:
+        return jsonify({"ok": False}), 403
+    return jsonify({"ok": True, "phones": n})
 
 
 @app.route("/api/apollo/sequences")
@@ -1043,7 +1228,7 @@ if __name__ == "__main__":
 
 
     ap = argparse.ArgumentParser(description="LinkedIn Sales Pipeline dashboard server")
-    ap.add_argument("--port", type=int, default=5000,
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 5000)),
                     help="Port to serve on (default 5000; macOS AirPlay may occupy 5000 — try 5001)")
     args = ap.parse_args()
 
